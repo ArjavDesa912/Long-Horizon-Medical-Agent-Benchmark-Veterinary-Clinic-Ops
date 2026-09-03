@@ -1,0 +1,52 @@
+{
+  "task_id": "090_after_hours_message_log",
+  "name": "veterinary_clinic_system_090_after_hours_message_log",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "create",
+  "surface": "backend",
+  "instruction": "Log an after-hours voicemail: owner id 7 (Frank Kowalski) called about rescheduling. Push one communications row {owner_id: '7', channel: 'phone', direction: 'inbound', subject: 'After-hours voicemail <batch_code>', body: 'Requested reschedule of next appointment; called after closing.', logged_by: 'answering service', occurred_at: episode timestamp}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 20,
+  "par_steps": 5,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_communications"
+  ],
+  "success_criteria": {
+    "summary": "Exactly one new row, exact fields incl. nonce in subject; total 17; seeded unchanged.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Exactly one new row, exact fields incl. nonce in subject; total 17; seeded unchanged."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Simple create with nonce embedding \u2014 calibration floor for the create category."
+  }
+}

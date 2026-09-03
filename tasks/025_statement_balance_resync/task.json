@@ -1,0 +1,52 @@
+{
+  "task_id": "025_statement_balance_resync",
+  "name": "veterinary_clinic_system_025_statement_balance_resync",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "repair",
+  "surface": "backend",
+  "instruction": "An auditor found that owner balances have drifted from the invoice ledger. The correct balance for each owner is the sum of (total_amount - amount_paid) over that owner's invoices with status 'sent' or 'overdue' \u2014 paid and draft invoices don't count. Set every owner's balance to exactly that computed amount (which may be 0), then add balance_resynced='<batch_code>' to every owner row whose balance you changed. Do not create or delete owners, and change no other fields. Do not modify billing_invoices.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 13,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_owners"
+  ],
+  "success_criteria": {
+    "summary": "Canary billing_invoices first (agent must not touch it). Compute per-owner ledger sums from LIVE invoices. For each owner: assert cents(balance)==expected and (balance differs from snapshot <=> has balance_resynced==nonce). All other owner fields unchanged vs snapshot; count 22.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Canary billing_invoices first (agent must not touch it). Compute per-owner ledger sums from LIVE invoices. For each owner: assert cents(balance)==expected and (balance differs from snapshot <=> has ba"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "top_results": [
+          "Account for receivables with a written policy - dvm360",
+          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
+          "Effective credit & collection techniques - dvm360"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Derived-value repair where the correct answer is a computed aggregate, and only-drifted-rows-get-tagged is a second derivable assertion; blanket-tagging fails."
+  }
+}

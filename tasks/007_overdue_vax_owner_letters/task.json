@@ -1,0 +1,61 @@
+{
+  "task_id": "007_overdue_vax_owner_letters",
+  "name": "veterinary_clinic_system_007_overdue_vax_owner_letters",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "workflow",
+  "surface": "backend",
+  "instruction": "Monthly compliance sweep, batched under the episode batch code. (1) In reminder_queue, mark every currently-queued vaccination_due row as status='sent' with sent_on set to the episode date. (2) For every patient that still has at least one overdue vaccination as of the episode date (due_date strictly before the episode date) \u2014 whether or not it had a queued reminder \u2014 push one communications row to its owner: channel='email', direction='outbound', subject='Vaccination compliance notice <batch_code>' (batch code from ops_meta), body='<PatientName> has <K> overdue vaccination(s) as of <episode date YYYY-MM-DD>.', logged_by='system', occurred_at on the episode date. (3) Push one audit-style row into reminder_queue: kind='sweep', status='done', message='sweep <batch_code>: <R> reminders sent, <C> owner notices', where R is the number of rows flipped in step 1 and C the number of rows created in step 2. Seeded communications must remain untouched.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 14,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_reminder_queue"
+  ],
+  "success_criteria": {
+    "summary": "R = count of snapshot reminder_queue rows with kind=='vaccination_due' and status=='queued' (2). Assert those rows now status=='sent' and dp(sent_on)==ep; assert other seeded queue rows unchanged. C = distinct patients with any vaccination due<ep. Assert exactly C new communications rows with exact fields (subject carries live batch_code; body K == patient's overdue count; date == ep). Assert one new sweep row with message numbers matching R and C. Totals: communications 16+C, reminder_queue 4+1.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "R = count of snapshot reminder_queue rows with kind=='vaccination_due' and status=='queued' (2). Assert those rows now status=='sent' and dp(sent_on)==ep; assert other seeded queue rows unchanged. C ="
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "top_results": [
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
+          "Key Vaccination: Rabies - AAHA",
+          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [
+      {
+        "query": "monthly compliance sweep overdue vaccination owner notice letters veterinary clinic batch",
+        "top_results": [
+          "Reminder/Recall | STChealth documentation",
+          "Patient Reminders | Vetspace Merlin manual"
+        ]
+      }
+    ],
+    "differentiation_note": "Three-phase batch with cross-collection count consistency (sweep row must agree with actual mutations) and nonce-stamped subjects \u2014 memorized counts fail on reseed."
+  }
+}

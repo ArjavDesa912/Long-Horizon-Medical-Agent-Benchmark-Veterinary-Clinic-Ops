@@ -1,0 +1,52 @@
+{
+  "task_id": "031_cs_administer_witnessed_entry",
+  "name": "veterinary_clinic_system_031_cs_administer_witnessed_entry",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "create",
+  "surface": "websearch",
+  "instruction": "Log a controlled-substance administration per DEA recordkeeping practice (every administration recorded with a witness \u2014 look up the convention if unsure): 0.2 units of Buprenorphine were administered to patient 4 (Noodle) for post-dental pain. Append one row to controlled_substance_log: item_name 'Buprenorphine', location_id '1', action 'administer', quantity 0.2, witnessed_by 'Rosa Delgado', performed_by 'Dr. Alvarez', occurred_at on the episode date, patient_id '4', notes 'Post-dental analgesia <batch_code>' (batch code from ops_meta). Append only \u2014 never edit existing log rows.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 20,
+  "par_steps": 5,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_controlled_substance_log"
+  ],
+  "success_criteria": {
+    "summary": "Assert exactly one new row with all exact fields (notes embeds live nonce); seeded 12 rows byte-identical to snapshot; total 13.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Assert exactly one new row with all exact fields (notes embeds live nonce); seeded 12 rows byte-identical to snapshot; total 13."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "top_results": [
+          "DEA compliance - AAHA",
+          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Append-only DEA log discipline; the seeded row shape must be matched exactly while embedding the live nonce."
+  }
+}

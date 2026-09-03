@@ -1,0 +1,52 @@
+{
+  "task_id": "033_cs_log_gap_detection",
+  "name": "veterinary_clinic_system_033_cs_log_gap_detection",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "repair",
+  "surface": "websearch",
+  "instruction": "Audit the controlled-substance log for DEA witness-compliance gaps: every row with action 'administer' or 'waste' must have a real witnessed_by value (not null, not '', not '\u2014'), because administration and waste require a witness while receive and dispense do not (verify the convention if needed). Fix violations minimally: set witnessed_by to 'Dr. Alvarez' and add field witness_corrected='<batch_code>'. Rows already compliant and all receive/dispense rows must remain byte-identical to seed.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_controlled_substance_log"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: rows with action in {administer, waste} and witnessed_by in (null,'','\u2014') -> assert witnessed_by=='Dr. Alvarez' and witness_corrected==nonce; assert all other rows byte-identical; count 12.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: rows with action in {administer, waste} and witnessed_by in (null,'','\u2014') -> assert witnessed_by=='Dr. Alvarez' and witness_corrected==nonce; assert all other rows byte-identical; count"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "top_results": [
+          "DEA compliance - AAHA",
+          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Rule-conditioned repair where the compliant set is defined by domain knowledge (receive/dispense exempt); over-fixing compliant rows fails byte-identity."
+  }
+}

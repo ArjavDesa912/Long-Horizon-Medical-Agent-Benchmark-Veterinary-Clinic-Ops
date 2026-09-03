@@ -1,0 +1,52 @@
+{
+  "task_id": "074_cross_location_patient_moves",
+  "name": "veterinary_clinic_system_074_cross_location_patient_moves",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "How much inter-location traffic is there? One ops_reports row {report: 'transfer_matrix', batch_code, matrix: <JSON object 'from->to' -> count of location_transfers rows with that from/to pair (all statuses)>, pending_total, completed_total, most_active_lane: <the 'from->to' key with the most transfers; tie -> alphabetically first>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute from live transfers; exact matrix dict + counts + lane tiebreak; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute from live transfers; exact matrix dict + counts + lane tiebreak; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Composite-key counting serialized into a JSON object with deterministic tiebreak."
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "task_id": "005_vaccine_lot_recall_trace",
+  "name": "veterinary_clinic_system_005_vaccine_lot_recall_trace",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "The manufacturer recalled one vaccine lot: the lot_number that appears most frequently across all vaccination records is suspect (break a tie by choosing the alphabetically smallest lot_number). Find every patient who received that lot, and for each affected patient's owner push one communications row with channel='phone', direction='outbound', subject='Vaccine lot recall \u2014 <lot_number>', body='Recall callback scheduled for <PatientName> (lot <lot_number>).', logged_by='Dr. Alvarez', and occurred_at on the episode date. One row per affected patient (not per vaccination). Do not touch any seeded communications.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_communications"
+  ],
+  "success_criteria": {
+    "summary": "Recompute modal lot from snapshot vaccinations (count per lot_number, tie -> alphabetical min). Affected = distinct patient_ids having that lot. Assert exactly one new communications row per affected patient with all fields exact; assert seeded 16 rows unchanged; total == 16 + len(affected); no extras.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute modal lot from snapshot vaccinations (count per lot_number, tie -> alphabetical min). Affected = distinct patient_ids having that lot. Assert exactly one new communications row per affected "
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "top_results": [
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
+          "Key Vaccination: Rabies - AAHA",
+          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [
+      {
+        "query": "vaccine lot recall most frequent lot_number trace veterinary benchmark",
+        "top_results": [
+          "Veterinary Vaccine Lot Number and Expiration Tracker | RationalGo App Builder",
+          "Boehringer Ingelheim Voluntary Rabies Vaccine Recall - Missouri Veterinary Medical Association"
+        ]
+      }
+    ],
+    "differentiation_note": "Mode-with-tiebreak aggregation + distinct-patient fan-out through a patient\u2192owner join; off-by-one duplicates are the common failure."
+  }
+}

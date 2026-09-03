@@ -1,0 +1,52 @@
+{
+  "task_id": "061_new_patient_enrollment",
+  "name": "veterinary_clinic_system_061_new_patient_enrollment",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "create",
+  "surface": "websearch",
+  "instruction": "Enroll a new patient: 'Maple Syrup', a female spayed rabbit (species 'exotic', breed 'Holland Lop'), born 2023-02-14, weight 1.8 kg, owned by owner id 3 (Ingrid Larsson) at location 1. Give her a valid ISO 11784 microchip id: 15 digits starting with manufacturer code 985 followed by 12 digits \u2014 use 985112 followed by zero-padded digits of 900001 (verify the ISO 11784 format online if unsure). status 'active', alerts [], spayed_neutered true, dob as an ISO timestamp at midnight UTC, created_at = episode timestamp.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 20,
+  "par_steps": 5,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_patients"
+  ],
+  "success_criteria": {
+    "summary": "Assert exactly one new patient with exact fields; microchip regex ^985112900001$ (15 digits, 985 prefix); count 31; seeded 30 byte-identical.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Assert exactly one new patient with exact fields; microchip regex ^985112900001$ (15 digits, 985 prefix); count 31; seeded 30 byte-identical."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "ISO 11784 pet microchip 15 digit format country code 985 manufacturer",
+        "top_results": [
+          "Manufacturer's ISO Codes (Alberta Animal Health Source PDF)",
+          "ISO 11784:2024 Code structure (ISO preview)",
+          "Microchipping - The Importance of ISO (WSAVA PDF)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Microchip format requires the ISO 11784 15-digit convention; agents emit arbitrary strings without the research step."
+  }
+}

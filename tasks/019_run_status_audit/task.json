@@ -1,0 +1,52 @@
+{
+  "task_id": "019_run_status_audit",
+  "name": "veterinary_clinic_system_019_run_status_audit",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "repair",
+  "surface": "backend",
+  "instruction": "The occupancy board and the reservation book disagree somewhere. A run is consistent iff: (status 'occupied' <=> there is a checked_in reservation on that run) AND (occupied runs have current_patient_id equal to that reservation's patient) AND (non-occupied runs have no current_patient_id). Find every inconsistent run and repair the RUN side only: set status 'occupied' + correct current_patient_id where a checked_in reservation exists; otherwise set status 'available' and current_patient_id null (unless the run is 'cleaning' with no occupant \u2014 leave those as 'cleaning'). Never edit reservations. Record your work: add field audited='<batch_code>' to every run you changed.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 12,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_boarding_runs"
+  ],
+  "success_criteria": {
+    "summary": "Recompute consistency from live reservations + snapshot runs. Assert every run now satisfies the invariant given live reservation state; assert each changed run has audited==nonce; assert runs not needing change are byte-identical to snapshot; assert reservations untouched (canary).",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute consistency from live reservations + snapshot runs. Assert every run now satisfies the invariant given live reservation state; assert each changed run has audited==nonce; assert runs not nee"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Bidirectional invariant repair (both false-occupied and false-available directions) with a leave-cleaning-alone exception; symptom-not-rows phrasing."
+  }
+}

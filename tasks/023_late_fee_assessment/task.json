@@ -1,0 +1,59 @@
+{
+  "task_id": "023_late_fee_assessment",
+  "name": "veterinary_clinic_system_023_late_fee_assessment",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "workflow",
+  "surface": "websearch",
+  "instruction": "Finance is assessing late fees. The percentage for THIS episode is stored in veterinary_clinic_system_ops_meta.late_fee_pct (an integer percent). For every invoice with status 'overdue' (after you apply the re-flagging rule: 'sent' with due_date strictly before the episode date becomes 'overdue') and unpaid balance, add a late fee: append a line item {description: 'Late fee (<pct>% of overdue balance)', quantity: 1, unit_price: <round(pct% * unpaid, 2)>} to that invoice, increase total_amount by the same amount, and increase the owner's balance by the same amount. Apply each invoice's fee once. Paid and draft invoices are never touched.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 14,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code",
+    "extra_fields": {
+      "late_fee_pct": {
+        "min": 3,
+        "max": 9
+      }
+    }
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_owners"
+  ],
+  "success_criteria": {
+    "summary": "Read late_fee_pct from ops_meta. Compute expected overdue set (sent with due<ep plus already-overdue) from snapshot. For each: assert status 'overdue', line_items == snapshot items + 1 with exact fee (cents), total == snapshot total + fee, and owner.balance == snapshot balance + sum of that owner's fees. Assert all other invoices/owners byte-identical.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Read late_fee_pct from ops_meta. Compute expected overdue set (sent with due<ep plus already-overdue) from snapshot. For each: assert status 'overdue', line_items == snapshot items + 1 with exact fee "
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "top_results": [
+          "Account for receivables with a written policy - dvm360",
+          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
+          "Effective credit & collection techniques - dvm360"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Per-episode randomized fee percentage (memorized constants fail), nested line-item append (not replace), and fan-out to owner balances."
+  }
+}

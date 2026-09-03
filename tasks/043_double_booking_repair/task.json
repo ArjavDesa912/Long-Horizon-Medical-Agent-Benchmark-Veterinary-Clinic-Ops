@@ -1,0 +1,52 @@
+{
+  "task_id": "043_double_booking_repair",
+  "name": "veterinary_clinic_system_043_double_booking_repair",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "repair",
+  "surface": "backend",
+  "instruction": "The schedule has double-bookings: appointments on the same date, same room, same location, and identical start_time with status 'scheduled' or 'confirmed' (completed/checked_in/no_show are history, not conflicts). For each conflicting GROUP, keep the appointment created first (earliest created_at; tie -> lowest id) and move the others: set their start_time and end_time 30 minutes later than the kept appointment's (e.g. kept 09:00\u201309:30 -> moved 09:30\u201310:00) and add field rescheduled='<batch_code>'. If the shifted slot itself collides with another same-day same-room scheduled/confirmed appointment, keep shifting by 30 minutes until free (never past 17:00 \u2014 if that would happen, instead set status 'needs_reschedule' and leave times unchanged). Do not alter kept appointments.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 13,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_appointments"
+  ],
+  "success_criteria": {
+    "summary": "Recompute conflict groups from LIVE post-state invariants: assert NO same date+location+room+start_time duplicates among scheduled/confirmed (unless 'needs_reschedule'); assert every moved row is snapshot-row + 30min*k shift matching the deterministic cascade and tagged with nonce; assert kept rows byte-identical; count 46. Implement by replaying the documented algorithm from snapshot and comparing the resulting full expected state for the appointments collection (ids fixed).",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute conflict groups from LIVE post-state invariants: assert NO same date+location+room+start_time duplicates among scheduled/confirmed (unless 'needs_reschedule'); assert every moved row is snap"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Constraint-cascade repair (shift-until-free with a give-up state); requires simulating a deterministic algorithm \u2014 memorized answers fail after reseed."
+  }
+}

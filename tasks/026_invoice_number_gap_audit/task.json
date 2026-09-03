@@ -1,0 +1,52 @@
+{
+  "task_id": "026_invoice_number_gap_audit",
+  "name": "veterinary_clinic_system_026_invoice_number_gap_audit",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Invoice numbers should be a gap-free sequence INV-1001..INV-1026. Verify and report: create one ops_reports row {report: 'invoice_sequence', batch_code, min_num: <smallest numeric suffix>, max_num: <largest>, count: <invoice rows>, missing: <comma-joined ascending list of missing numbers in that range, or ''>, sequence_ok: <true iff count == max-min+1 and there are no gaps>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute from live invoice_numbers (parse digits after INV-). Assert exact field values (missing '' and sequence_ok true for pristine seed; count 26). Single row.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute from live invoice_numbers (parse digits after INV-). Assert exact field values (missing '' and sequence_ok true for pristine seed; count 26). Single row."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "top_results": [
+          "Account for receivables with a written policy - dvm360",
+          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
+          "Effective credit & collection techniques - dvm360"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Sequence-integrity reporting (gap detection) \u2014 agents typically count rows and skip the actual gap math."
+  }
+}

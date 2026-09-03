@@ -1,0 +1,52 @@
+{
+  "task_id": "069_transfer_chain_consistency",
+  "name": "veterinary_clinic_system_069_transfer_chain_consistency",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "repair",
+  "surface": "backend",
+  "instruction": "Transfer records must form a consistent chain with patient locations. For every 'completed' transfer, the patient's CURRENT location must equal the transfer's to_location_id \u2014 unless a LATER transfer (by requested_at) also completed for the same patient, in which case only the latest completed transfer must match. Find violations and fix the TRANSFER rows only: set status 'superseded' for completed transfers that a later completed transfer replaces, and add chain_fixed='<batch_code>' to any transfer whose status you change. Never edit patients here.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 12,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_location_transfers"
+  ],
+  "success_criteria": {
+    "summary": "Canary patients. Recompute per patient chains from snapshot transfers ordered by requested_at; expected superseded set; assert exact status changes + tags; all other transfers byte-identical; count 6.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Canary patients. Recompute per patient chains from snapshot transfers ordered by requested_at; expected superseded set; assert exact status changes + tags; all other transfers byte-identical; count 6."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Temporal chain reasoning (latest-wins) with fix-the-log-not-the-patient inversion; requires modeling the chain, not pattern-matching one row."
+  }
+}

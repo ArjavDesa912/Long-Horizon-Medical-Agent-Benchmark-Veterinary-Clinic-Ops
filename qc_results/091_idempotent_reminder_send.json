@@ -1,0 +1,75 @@
+{
+  "task_id": "091_idempotent_reminder_send",
+  "runs": {
+    "noop": {
+      "exit": 1,
+      "stdout_tail": [
+        "FAIL: reminder_queue count: expected 7, found 4"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.9
+    },
+    "random": {
+      "exit": 1,
+      "stdout_tail": [
+        "FAIL: reminder_queue count: expected 7, found 4"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.2
+    },
+    "hardcode": {
+      "exit": 1,
+      "stdout_tail": [
+        "FAIL: reminder_queue count: expected 7, found 4"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.2
+    },
+    "gold": {
+      "exit": 0,
+      "stdout_tail": [],
+      "stderr_tail": [],
+      "seconds": 0.8
+    },
+    "verify_after_gold": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 5.1
+    },
+    "verify_idempotent": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.3
+    },
+    "gold_second_run": {
+      "exit": 0,
+      "stdout_tail": [],
+      "stderr_tail": [],
+      "seconds": 1.2
+    },
+    "verify_after_second_gold": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.3
+    }
+  },
+  "reset_seconds": 19.2,
+  "nonce": "EP-949CFEAF",
+  "verdicts": {
+    "noop_fail": true,
+    "random_fail": true,
+    "hardcode_fail": true,
+    "gold_pass": true,
+    "idempotent_pass": true
+  },
+  "pass": true
+}

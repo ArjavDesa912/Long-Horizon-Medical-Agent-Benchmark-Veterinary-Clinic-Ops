@@ -1,0 +1,53 @@
+{
+  "task_id": "016_boarding_stay_invoice_draft",
+  "name": "veterinary_clinic_system_016_boarding_stay_invoice_draft",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "workflow",
+  "surface": "websearch",
+  "instruction": "Check out every guest whose stay ends on or before the episode date and bill the stay \u2014 this is what the front desk does at pick-up. For each checked_in reservation with check_out <= episode date: (1) set the reservation status to 'checked_out'; (2) create a draft invoice for the owner with invoice_number 'INV-B<batch_code>-<reservation_id>' (batch code from ops_meta), owner_id and patient_id from the reservation, location_id from the reservation, issued_date and due_date both on the episode date (due = issued + 21 days, standard net-21 \u2014 verify the convention if unsure), line_items=[{description: 'Boarding (<N> nights - <run_type>)', quantity: <N>, unit_price: <BOARD-NIGHT price from that location's fee schedule>}], total_amount=<N*price>, amount_paid=0, status='draft'. N = nights = days between check_in and check_out. Do not free the runs (housekeeping handles that separately) and do not touch paid invoices.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 50,
+  "par_steps": 15,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_boarding_reservations"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: checked_in reservations with dp(check_out)<=ep. For each: assert status=='checked_out' and exactly one invoice with exact invoice_number (live nonce), correct owner/patient/location, N==days(dp(check_in),dp(check_out)), unit_price==snapshot fee_schedule BOARD-NIGHT price for that location, totals in cents, status draft. Assert no other invoice rows added/changed (count == 26+E) and all paid invoices unchanged.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: checked_in reservations with dp(check_out)<=ep. For each: assert status=='checked_out' and exactly one invoice with exact invoice_number (live nonce), correct owner/patient/location, N="
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Multi-hop pricing (fee schedule join), night-count date arithmetic, net-21 due-date convention from domain knowledge, nonce-embedded numbering."
+  }
+}

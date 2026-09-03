@@ -1,0 +1,52 @@
+{
+  "task_id": "080_enterprise_kpi_pack",
+  "name": "veterinary_clinic_system_080_enterprise_kpi_pack",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "aggregation",
+  "surface": "frontend",
+  "instruction": "The Monday leadership pack, all KPIs in one row. Create one ops_reports row {report: 'kpi_pack', batch_code, on_episode_date: '<YYYY-MM-DD>', appointments_today, boarding_occupancy_pct: <100*occupied/total runs, round 1>, vaccinations_overdue: <vaccinations with due_date strictly before episode date>, outstanding_balance_total: <sum over owners of balance, dollars>, open_invoices: <invoices status 'sent' or 'overdue'>, critical_labs_open: <lab_results flag 'critical'>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 50,
+  "par_steps": 15,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute all six KPIs from live data vs ep; exact values (pct within 0.05, money cents); nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute all six KPIs from live data vs ep; exact values (pct within 0.05, money cents); nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Six-source KPI fan-in matching the dashboard's KPI row definitions; each KPI has its own subtlety (strict-before, status set, float sum)."
+  }
+}

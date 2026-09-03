@@ -1,0 +1,52 @@
+{
+  "task_id": "076_weekly_schedule_load_balance",
+  "name": "veterinary_clinic_system_076_weekly_schedule_load_balance",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Load-balance analysis for the coming week (episode date through episode date + 6 days inclusive). One ops_reports row per provider with role 'veterinarian': {report: 'weekly_load', batch_code, provider_id, provider_name, scheduled_hours: <sum over that vet's scheduled/confirmed appointments in the window of 30-minute slots / 2, as a number>, appointment_count, busiest_day: <the window date with their most appointments as YYYY-MM-DD; tie -> earliest; null if none>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 13,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute from live appointments within [ep, ep+6]; exact numbers; busiest_day with tiebreak (null handling); 4 rows; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute from live appointments within [ep, ep+6]; exact numbers; busiest_day with tiebreak (null handling); 4 rows; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Slot-to-hours conversion, 7-day inclusive window, and per-row argmax with null case \u2014 compound conditions that punish shallow reads."
+  }
+}

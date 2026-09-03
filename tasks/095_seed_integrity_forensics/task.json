@@ -1,0 +1,46 @@
+{
+  "task_id": "095_seed_integrity_forensics",
+  "name": "veterinary_clinic_system_095_seed_integrity_forensics",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "repair",
+  "surface": "backend",
+  "instruction": "READ-ONLY forensic audit \u2014 change NOTHING in any collection. Cross-check the whole dataset for referential integrity: (a) patients.owner_id must exist in owners; (b) appointments.patient_id and provider_id must exist; (c) boarding_reservations.run_id and patient_id must exist; (d) visit_records and lab_results patient_id must exist; (e) billing_invoices.owner_id and patient_id must exist; (f) vaccinations.patient_id must exist. Create one ops_reports row {report: 'integrity_audit', batch_code, violations: <total count of dangling references across all six checks>, detail: <JSON object '<collection>.<field>' -> count for every checked pair, including zeros>, clean: <true iff violations == 0>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 60,
+  "par_steps": 15,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [],
+  "success_criteria": {
+    "summary": "Canary ALL seeded collections (nothing may change). Recompute the six dangling-reference counts from live data; assert exact total, exact detail dict (zeros included), clean flag; nonce.",
+    "checks": [
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Canary ALL seeded collections (nothing may change). Recompute the six dangling-reference counts from live data; assert exact total, exact detail dict (zeros included), clean flag; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Whole-graph referential audit with a must-be-zero-expectation report; the canary-everything design makes tampering to force 'clean' detectable."
+  }
+}

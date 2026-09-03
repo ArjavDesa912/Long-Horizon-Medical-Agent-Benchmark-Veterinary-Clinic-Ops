@@ -1,0 +1,52 @@
+{
+  "task_id": "071_location_performance_dashboard",
+  "name": "veterinary_clinic_system_071_location_performance_dashboard",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "frontend",
+  "instruction": "Recreate the org-admin 'All Locations' dashboard rollup. One ops_reports row per location: {report: 'location_rollup', batch_code, location_id, location_name, appointments_total, appointments_today: <appointment_date == episode date>, active_patients: <patients with status 'active'>, occupancy_pct: <round(100*occupied_runs/total_runs,1) from boarding_runs at that location>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 11,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute all four metrics per location from live data; assert 3 rows exact (pct within 0.05); nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute all four metrics per location from live data; assert 3 rows exact (pct within 0.05); nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Four-metric join across three collections per location; mirrors the dashboard's org-admin toggle."
+  }
+}

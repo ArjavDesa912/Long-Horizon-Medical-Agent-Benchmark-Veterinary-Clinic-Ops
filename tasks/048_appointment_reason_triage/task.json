@@ -1,0 +1,52 @@
+{
+  "task_id": "048_appointment_reason_triage",
+  "name": "veterinary_clinic_system_048_appointment_reason_triage",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "update",
+  "surface": "websearch",
+  "instruction": "Triage tagging for upcoming visits. For every appointment on or after the episode date with status 'scheduled' or 'confirmed', add a triage_tier field: 'urgent' if the reason mentions vomiting, limping/lameness, or 'ear infection' (case-insensitive); 'routine' if it mentions wellness, vaccine, or weight management; 'standard' for everything else. Pre-episode and historical-status appointments stay untouched.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_appointments"
+  ],
+  "success_criteria": {
+    "summary": "Recompute expected tier per appointment from snapshot reasons with the documented keyword rules (vomit|limping|lameness|ear infection -> urgent; wellness|vaccine|weight management -> routine; else standard), date>=ep, status in set. Assert tier on exactly those rows; others byte-identical; count 46.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute expected tier per appointment from snapshot reasons with the documented keyword rules (vomit|limping|lameness|ear infection -> urgent; wellness|vaccine|weight management -> routine; else sta"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Free-text keyword classification with overlapping semantics ('Ear infection re-check' urgent vs 'Vaccine boosters due' routine); agents misclassify boundary strings."
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "task_id": "045_same_day_reschedule_block",
+  "name": "veterinary_clinic_system_045_same_day_reschedule_block",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "update",
+  "surface": "backend",
+  "instruction": "Dr. Natarajan (provider id 3) called out sick. Move every 'scheduled' appointment of provider 3 that falls on or after the episode date to provider 4 (Dr. Okafor) and add field covering_for='3'. Confirmed appointments stay with provider 3 (clients were notified), and past appointments are history. Nothing else changes.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 9,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_appointments"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: provider 3, status scheduled, dp(appointment_date)>=ep -> provider_id=='4' + covering_for=='3'; all other appointments byte-identical; count 46.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: provider 3, status scheduled, dp(appointment_date)>=ep -> provider_id=='4' + covering_for=='3'; all other appointments byte-identical; count 46."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Status-conditioned partial migration with a provenance field; moving confirmed rows is the tempting wrong answer."
+  }
+}

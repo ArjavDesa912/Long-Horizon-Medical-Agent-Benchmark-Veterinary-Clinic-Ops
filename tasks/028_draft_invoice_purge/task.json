@@ -1,0 +1,52 @@
+{
+  "task_id": "028_draft_invoice_purge",
+  "name": "veterinary_clinic_system_028_draft_invoice_purge",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "delete",
+  "surface": "backend",
+  "instruction": "Delete every billing invoice with status 'draft'. Paid, sent, and overdue invoices must remain exactly as seeded. Report nothing; just leave the ledger clean.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 20,
+  "par_steps": 4,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_billing_invoices"
+  ],
+  "success_criteria": {
+    "summary": "Assert no invoice with status 'draft' remains; assert all non-draft invoices byte-identical to snapshot; count == 26 - (draft count in snapshot, 1).",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Assert no invoice with status 'draft' remains; assert all non-draft invoices byte-identical to snapshot; count == 26 - (draft count in snapshot, 1)."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "top_results": [
+          "Account for receivables with a written policy - dvm360",
+          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
+          "Effective credit & collection techniques - dvm360"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Surgical delete with exact preservation of survivors \u2014 bulk-delete-then-reinsert hacks fail byte-identity (ids/updated_at)."
+  }
+}

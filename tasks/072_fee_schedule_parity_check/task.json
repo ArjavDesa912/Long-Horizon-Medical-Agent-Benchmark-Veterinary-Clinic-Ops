@@ -1,0 +1,52 @@
+{
+  "task_id": "072_fee_schedule_parity_check",
+  "name": "veterinary_clinic_system_072_fee_schedule_parity_check",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Corporate wants to know if pricing is uniform. Compare the three locations' fee schedules item-by-item (match on code). Create one ops_reports row {report: 'fee_parity', batch_code, uniform: <true iff every code has identical price across all locations>, divergent_codes: <comma-joined sorted codes whose prices differ, or ''>, checked_codes: <count of distinct codes compared>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 9,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute from live fee_schedules items arrays; exact fields; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute from live fee_schedules items arrays; exact fields; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Nested-array structural comparison across rows; agents compare row ids instead of item codes."
+  }
+}

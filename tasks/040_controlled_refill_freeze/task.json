@@ -1,0 +1,53 @@
+{
+  "task_id": "040_controlled_refill_freeze",
+  "name": "veterinary_clinic_system_040_controlled_refill_freeze",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "workflow",
+  "surface": "websearch",
+  "instruction": "Policy freeze: no controlled-substance prescription may carry refills once it has been active over 90 days (consistent with DEA caution around schedule III\u2013V refills \u2014 verify if unsure). For every medication row with is_controlled_substance true, active true, and prescribed_at more than 90 days before the episode date: set refills_remaining to 0 and add field refill_frozen='<batch_code>'. Log one audit_log row per affected prescription: {actor: 'system', actor_role: 'system', action: 'REFILL_FREEZE', target_collection: 'medications', target_id: <medication id as string>, details: 'Refills frozen for <drug_name> (<batch_code>)', occurred_at: episode timestamp}. Younger or inactive prescriptions are untouched.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 12,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_medications",
+    "veterinary_clinic_system_audit_log"
+  ],
+  "success_criteria": {
+    "summary": "Read ep. From snapshot: controlled+active rows with (ep - prescribed_at).days>90 -> assert refills 0 + tag; one audit row each with exact fields. All other medications byte-identical; audit count 4+K; nonce everywhere.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Read ep. From snapshot: controlled+active rows with (ep - prescribed_at).days>90 -> assert refills 0 + tag; one audit row each with exact fields. All other medications byte-identical; audit count 4+K;"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "top_results": [
+          "DEA compliance - AAHA",
+          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Age-in-days threshold on a timestamp field + paired audit entries; domain-knowledge framing with a data-derived target set."
+  }
+}

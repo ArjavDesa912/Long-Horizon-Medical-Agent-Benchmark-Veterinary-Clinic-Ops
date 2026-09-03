@@ -1,0 +1,52 @@
+{
+  "task_id": "039_low_stock_supplier_summary",
+  "name": "veterinary_clinic_system_039_low_stock_supplier_summary",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Group the reorder problem by supplier for the weekly order call. One ops_reports row per supplier that has at least one item at or below reorder level: {report: 'supplier_reorder', batch_code, supplier, items_below: <count of that supplier's rows with qty <= reorder_level>, est_cost: <sum over those rows of unit_price*(reorder_level*2 - quantity_on_hand), dollars>, locations_affected: <comma-joined sorted distinct location_ids>}. Any order.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute from live inventory; exact counts, cents-exact costs, exact sorted CSV strings; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute from live inventory; exact counts, cents-exact costs, exact sorted CSV strings; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "top_results": [
+          "DEA compliance - AAHA",
+          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Group-by over a filtered set with a derived cost formula and a sorted-CSV field; agents botch the CSV ordering."
+  }
+}

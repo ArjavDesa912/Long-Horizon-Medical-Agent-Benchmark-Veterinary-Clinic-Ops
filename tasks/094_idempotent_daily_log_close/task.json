@@ -1,0 +1,52 @@
+{
+  "task_id": "094_idempotent_daily_log_close",
+  "name": "veterinary_clinic_system_094_idempotent_daily_log_close",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "idempotency",
+  "surface": "frontend",
+  "instruction": "Close out the boarding day, re-runnable: for every checked_in reservation, ensure there is a boarding_daily_log row for the episode date. If missing, create it with fed_am/fed_pm/medicated/walked all false, notes 'auto-closed <batch_code>', logged_by 'system'. If a row for that reservation+date already exists, leave it completely unchanged. Running twice must create zero new rows the second time.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_boarding_daily_log"
+  ],
+  "success_criteria": {
+    "summary": "Assert one episode-date row per checked_in reservation (exactly); rows that existed in snapshot byte-identical; auto-created rows exact with nonce note; total == 10 + (checked_in count - preexisting episode rows).",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Assert one episode-date row per checked_in reservation (exactly); rows that existed in snapshot byte-identical; auto-created rows exact with nonce note; total == 10 + (checked_in count - preexisting e"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Existence-checked insert (natural key: reservation+date); blind insert fails on duplicates."
+  }
+}

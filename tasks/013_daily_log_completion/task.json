@@ -1,0 +1,60 @@
+{
+  "task_id": "013_daily_log_completion",
+  "name": "veterinary_clinic_system_013_daily_log_completion",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "create",
+  "surface": "frontend",
+  "instruction": "Kennel staff finished the evening round. For every reservation currently checked_in, make sure a boarding_daily_log row exists for the episode date with fed_am=true, fed_pm=true, medicated and walked reflecting that reservation's instructions (medicated=true only if medication_instructions is not 'None'; walked=true for all dogs \u2014 run_type 'kennel' or 'large_dog' \u2014 and false for cattery guests), notes='', and logged_by='Hank Willis'. If a row for that reservation and date already exists, update it to these values instead of creating a duplicate. Seeded log rows for other dates must remain untouched.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_boarding_daily_log"
+  ],
+  "success_criteria": {
+    "summary": "Expected: for each checked_in reservation (5 from snapshot), exactly one log row with dp(log_date)==episode_date and the rule-computed booleans (join run type via run_id). Assert no reservation has 2 rows for the episode date; assert seeded rows for other dates unchanged; total == 10 + (5 - preexisting-episode-rows).",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Expected: for each checked_in reservation (5 from snapshot), exactly one log row with dp(log_date)==episode_date and the rule-computed booleans (join run type via run_id). Assert no reservation has 2 "
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [
+      {
+        "query": "boarding daily log fed_am fed_pm medicated walked kennel evening round software",
+        "top_results": [
+          "PawOps — Dog Boarding & Kennel Management Software",
+          "Pet Boarding Management Software | PetConnect"
+        ]
+      }
+    ],
+    "differentiation_note": "Upsert (not blind insert) + instruction-conditional booleans through a reservation\u2192run join; duplicate-creating agents fail the uniqueness check."
+  }
+}

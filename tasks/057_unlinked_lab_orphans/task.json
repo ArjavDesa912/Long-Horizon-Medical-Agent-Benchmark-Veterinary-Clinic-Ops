@@ -1,0 +1,52 @@
+{
+  "task_id": "057_unlinked_lab_orphans",
+  "name": "veterinary_clinic_system_057_unlinked_lab_orphans",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "repair",
+  "surface": "backend",
+  "instruction": "Data hygiene: every lab_results row must reference a patient that exists AND is not status 'transferred' (transferred patients' results belong to the receiving clinic). Find orphan rows (patient_id missing from patients, or pointing at a transferred patient) and mark them orphan=true with orphan_note='<batch_code>'. Do not delete anything; do not modify valid rows.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 9,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_lab_results"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: lab rows whose patient_id not in live patients ids or patient status=='transferred' -> assert orphan true + note nonce; others byte-identical; count 6.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: lab rows whose patient_id not in live patients ids or patient status=='transferred' -> assert orphan true + note nonce; others byte-identical; count 6."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "top_results": [
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
+          "Key Vaccination: Rabies - AAHA",
+          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Referential-integrity audit across collections with a non-obvious second condition (transferred status)."
+  }
+}

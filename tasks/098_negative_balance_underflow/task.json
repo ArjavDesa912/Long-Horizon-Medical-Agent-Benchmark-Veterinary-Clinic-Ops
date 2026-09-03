@@ -1,0 +1,52 @@
+{
+  "task_id": "098_negative_balance_underflow",
+  "name": "veterinary_clinic_system_098_negative_balance_underflow",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "repair",
+  "surface": "backend",
+  "instruction": "Balances must never be negative (a credit is stored as a separate adjustment, not a negative balance). Find owners with balance < 0, move the negative amount into a new field credit_balance (positive number), set balance to 0, and tag them credit_fixed='<batch_code>'. Non-negative owners stay byte-identical.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_owners"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: negative-balance owners -> balance 0, credit_balance == -old (cents), tag nonce; others byte-identical; count 22.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: negative-balance owners -> balance 0, credit_balance == -old (cents), tag nonce; others byte-identical; count 22."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Sign-flip field migration with cents precision; the seed may contain zero negatives \u2014 in which case doing NOTHING is correct and the verifier accepts the pristine state ONLY for this collection... no: assert no row changed and no credit_fixed tags exist."
+  }
+}

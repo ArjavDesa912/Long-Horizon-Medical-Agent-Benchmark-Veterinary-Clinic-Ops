@@ -1,0 +1,52 @@
+{
+  "task_id": "079_appointment_to_visit_linkage",
+  "name": "veterinary_clinic_system_079_appointment_to_visit_linkage",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Measure clinical follow-through: what fraction of completed appointments have a matching visit record (same patient, same provider, visit_date equal to the appointment_date)? One ops_reports row {report: 'follow_through', batch_code, completed_appointments, matched: <completed appointments with an exact 3-field match in visit_records>, unmatched, match_pct: <round(100*matched/completed,1)>, unmatched_ids: <comma-joined ascending ids of unmatched completed appointments, or ''>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 13,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute from live appointments + visit_records with exact triple match; assert ints, pct, CSV ids; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute from live appointments + visit_records with exact triple match; assert ints, pct, CSV ids; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Three-field join predicate with an id-listing requirement; partial matches (patient-only) are the classic overcount."
+  }
+}

@@ -1,0 +1,48 @@
+# Prime Intellect deployment descriptor for the veterinary_clinic_system RL environment.
+#
+# The image is fully self-contained (Postgres 15 + VibeDB BaaS + prebuilt frontend,
+# all started by Supervisor from a single ENTRYPOINT), so this descriptor only needs to
+# say which image to pull, which two ports to publish, and how to probe readiness.
+# There is no external database, no Qdrant, and no volume mount — every `docker run`
+# starts from an identical, pristine, pre-seeded filesystem.
+#
+# Adapt the top-level keys to whatever schema your Prime Intellect environment registry
+# expects; the values themselves are what matter and are all sourced from
+# /rl/manifest.json inside the image.
+
+name: veterinary_clinic_system
+image: rl-env/veterinary_clinic_system:latest
+
+ports:
+  # Prebuilt frontend (Vite `serve -s`), container-internal port from EXPOSE.
+  - name: app
+    container_port: 5110
+    publish: true
+  # VibeDB BaaS REST API.
+  - name: vibedb
+    container_port: 8080
+    publish: true
+
+readiness_probe:
+  type: exec
+  command: ["/rl/healthcheck.sh"]
+  # Mirrors the image's own HEALTHCHECK directive.
+  initial_delay_seconds: 90
+  period_seconds: 20
+  timeout_seconds: 10
+  failure_threshold: 5
+
+volumes: []  # intentionally empty — the image is fully self-contained
+
+env: {}  # no required env vars; optional overrides: PUBLIC_VIBEDB_URL, EXTRA_CORS_ORIGINS
+
+resources:
+  # Conservative defaults for a single Postgres + VibeDB + static-file-server container.
+  cpu: "1"
+  memory: "2Gi"
+
+metadata:
+  slug: veterinary_clinic_system
+  framework: vite
+  collection_prefix: veterinary_clinic_system_
+  vibedb_url: http://localhost:8080

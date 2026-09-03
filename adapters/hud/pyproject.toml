@@ -1,0 +1,8 @@
+[project]
+name = "veterinary-clinic-system-hud"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["hud", "gymnasium"]  # gymnasium: the reference ../../env.py this adapter loads imports it
+
+[tool.uv]
+package = false

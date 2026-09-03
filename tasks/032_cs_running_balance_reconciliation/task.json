@@ -1,0 +1,52 @@
+{
+  "task_id": "032_cs_running_balance_reconciliation",
+  "name": "veterinary_clinic_system_032_cs_running_balance_reconciliation",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "aggregation",
+  "surface": "websearch",
+  "instruction": "DEA-style reconciliation: for each controlled item, the expected on-hand balance is sum(receive) - sum(administer) - sum(waste) - sum(dispense) over controlled_substance_log. Compare with pharmacy_inventory.quantity_on_hand for is_controlled items (sum across locations). Create one ops_reports row per controlled item present in the LOG: {report: 'cs_reconciliation', batch_code, item_name, log_balance: <number>, inventory_on_hand: <number or null if no inventory row>, discrepancy: <log_balance - inventory_on_hand, or null>}. Any order. Exactly one row per distinct logged item.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 13,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute per-item balances from live cs log; inventory sums from live pharmacy_inventory where is_controlled. Assert one row per distinct logged item_name, exact numeric equality (floats within 1e-9), nulls where no inventory match; nonce correct.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute per-item balances from live cs log; inventory sums from live pharmacy_inventory where is_controlled. Assert one row per distinct logged item_name, exact numeric equality (floats within 1e-9)"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "top_results": [
+          "DEA compliance - AAHA",
+          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Sign-correct multi-action ledger aggregation (receive positive, others negative) and intentional null handling; agents flip dispense/waste signs."
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "task_id": "021_overdue_invoice_flagging",
+  "name": "veterinary_clinic_system_021_overdue_invoice_flagging",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "update",
+  "surface": "backend",
+  "instruction": "Month-end housekeeping: in billing_invoices, every invoice with status 'sent' whose due_date is strictly before the episode date (ops_meta.episode_date) must be re-flagged status='overdue'. Invoices already paid, drafts, or not yet due stay exactly as they are. Nothing else changes.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 25,
+  "par_steps": 5,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_billing_invoices"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: sent invoices with dp(due_date)<ep -> status 'overdue'; all other invoices byte-identical to snapshot; count 26.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: sent invoices with dp(due_date)<ep -> status 'overdue'; all other invoices byte-identical to snapshot; count 26."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "top_results": [
+          "Account for receivables with a written policy - dvm360",
+          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
+          "Effective credit & collection techniques - dvm360"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Single-collection conditional status migration; the trap is touching 'sent' invoices whose due date is in the future."
+  }
+}

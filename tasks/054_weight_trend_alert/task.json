@@ -1,0 +1,53 @@
+{
+  "task_id": "054_weight_trend_alert",
+  "name": "veterinary_clinic_system_054_weight_trend_alert",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "aggregation",
+  "surface": "websearch",
+  "instruction": "Flag unhealthy weight trends. For every patient with at least 2 visit_records, compare weight_kg at the most recent visit vs the earliest recorded visit: a gain or loss of more than 10% (strictly) is clinically significant (verify the rule of thumb if unsure). For each flagged patient: (1) add the alert string 'Weight change >10% \u2014 review diet plan' to the patient's alerts array (append; preserve existing alerts; skip patients already carrying this exact alert); (2) push one ops_reports row {report: 'weight_alert', batch_code, patient_id, name, first_weight, latest_weight, change_pct: <round(100*(latest-first)/first, 1)>, direction: 'gain' or 'loss'}. Patients with fewer than 2 visits are ignored.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 14,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_patients"
+  ],
+  "success_criteria": {
+    "summary": "Recompute from live visit_records per patient (order by dp(visit_date), tie by created_at then id). Assert flagged set exact (>10% strict); alerts arrays == snapshot alerts + appended string (no dupes); report rows exact incl. rounded change_pct; unflagged patients byte-identical.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute from live visit_records per patient (order by dp(visit_date), tie by created_at then id). Assert flagged set exact (>10% strict); alerts arrays == snapshot alerts + appended string (no dupes"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "top_results": [
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
+          "Key Vaccination: Rabies - AAHA",
+          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Temporal first-vs-last comparison with strict threshold, array-append semantics, and duplicate-suppression \u2014 a 3-way skill check."
+  }
+}

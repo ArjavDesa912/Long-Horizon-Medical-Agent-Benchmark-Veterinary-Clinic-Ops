@@ -1,0 +1,52 @@
+{
+  "task_id": "017_feeding_instruction_digest",
+  "name": "veterinary_clinic_system_017_feeding_instruction_digest",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "The kitchen whiteboard needs today's feeding plan. Create one ops_reports row {report: 'feeding_digest', batch_code, on_episode_date: <episode date YYYY-MM-DD>, guests: <number of checked_in reservations>, raw_diets: <how many of those reservations' feeding_instructions contain the substring 'Raw' (case-sensitive)>, med_guests: <how many have medication_instructions other than 'None'>}. Exactly one row.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 9,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute the three ints from live checked_in reservations; assert single row with exact values and nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute the three ints from live checked_in reservations; assert single row with exact values and nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Substring semantics (case-sensitive 'Raw') and 'None' literal exclusion trip agents that normalize text."
+  }
+}

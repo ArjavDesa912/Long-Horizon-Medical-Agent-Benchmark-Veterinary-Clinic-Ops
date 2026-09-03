@@ -1,0 +1,52 @@
+{
+  "task_id": "044_provider_utilization_report",
+  "name": "veterinary_clinic_system_044_provider_utilization_report",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "How busy is each doctor? One ops_reports row per provider with role 'veterinarian': {report: 'provider_utilization', batch_code, provider_id, provider_name, total_appointments, completed, no_shows, upcoming: <appointments with appointment_date on or after the episode date and status in ('scheduled','confirmed','checked_in')>}. Any order; only veterinarians.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute per veterinarian from live appointments; exact ints; rows == 4 vets; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute per veterinarian from live appointments; exact ints; rows == 4 vets; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Role-filtered group-by with a status-set + date-window compound condition for 'upcoming'."
+  }
+}

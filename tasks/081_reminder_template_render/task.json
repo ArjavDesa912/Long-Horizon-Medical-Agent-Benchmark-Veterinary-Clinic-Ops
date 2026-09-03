@@ -1,0 +1,52 @@
+{
+  "task_id": "081_reminder_template_render",
+  "name": "veterinary_clinic_system_081_reminder_template_render",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "workflow",
+  "surface": "frontend",
+  "instruction": "Render the seeded 'Vaccination overdue (SMS)' reminder template for every patient with an overdue vaccination (due_date strictly before the episode date) who is NOT already in the queue with a queued vaccination_due row. Substitute {{patient_name}}, {{vaccine_type}}, {{due_date YYYY-MM-DD of the patient's oldest overdue vaccination}}, and {{clinic_phone}} with the phone of the LOCATION the patient belongs to. Push one row per patient: {kind: 'vaccination_due', patient_id, due_date: <oldest overdue due_date>, message: <rendered template>, status: 'queued', queued_by: 'system', queued_at: episode timestamp}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 11,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_reminder_queue"
+  ],
+  "success_criteria": {
+    "summary": "Fetch template from live reminder_templates (name 'Vaccination overdue (SMS)'). Compute target set (overdue patients minus already-queued). Assert rendered messages exactly match template substitution (patient name, oldest-overdue vaccine_type + dp(due_date), location phone from snapshot locations); totals exact; seeded rows unchanged.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Fetch template from live reminder_templates (name 'Vaccination overdue (SMS)'). Compute target set (overdue patients minus already-queued). Assert rendered messages exactly match template substitution"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Template rendering with a multi-source substitution map (patient + vaccination + location phone); agents hardcode the phone or use the wrong due date."
+  }
+}

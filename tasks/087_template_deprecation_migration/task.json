@@ -1,0 +1,52 @@
+{
+  "task_id": "087_template_deprecation_migration",
+  "name": "veterinary_clinic_system_087_template_deprecation_migration",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "update",
+  "surface": "frontend",
+  "instruction": "The SMS channel for vaccination reminders is being retired in favor of email. Update the reminder_templates row named 'Vaccination overdue (SMS)': set channel 'email', set active false, and append to its message_template the suffix ' (migrated from SMS <batch_code>)'. All other templates stay byte-identical.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_reminder_templates"
+  ],
+  "success_criteria": {
+    "summary": "Assert that template row has channel email, active false, message_template == snapshot template + exact suffix with nonce; other 4 rows byte-identical; count 5.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Assert that template row has channel email, active false, message_template == snapshot template + exact suffix with nonce; other 4 rows byte-identical; count 5."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "String-append migration (not replacement) on a template with a nonce marker; exactness of the suffix string."
+  }
+}

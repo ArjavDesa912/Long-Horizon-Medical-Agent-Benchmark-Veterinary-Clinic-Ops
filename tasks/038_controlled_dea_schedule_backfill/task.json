@@ -1,0 +1,52 @@
+{
+  "task_id": "038_controlled_dea_schedule_backfill",
+  "name": "veterinary_clinic_system_038_controlled_dea_schedule_backfill",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "repair",
+  "surface": "websearch",
+  "instruction": "Regulatory backfill: every medication with is_controlled_substance=true must carry the correct DEA schedule in dea_schedule. Any controlled row missing dea_schedule must be fixed using the schedule that the OTHER rows for the same drug_name already use (the clinic's existing classifications are authoritative). If no other row for that drug exists, look up the drug's current DEA schedule online. Non-controlled rows must not gain a dea_schedule. Add field schedule_fixed='<batch_code>' to each row you change.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 9,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_medications"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: controlled rows with missing/empty dea_schedule -> expected schedule = modal schedule among snapshot rows with same drug_name (fallback: known map Buprenorphine V, Tramadol IV, Ketamine III, Alprazolam IV). Assert exact fix + tag; all other rows byte-identical; count 20.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: controlled rows with missing/empty dea_schedule -> expected schedule = modal schedule among snapshot rows with same drug_name (fallback: known map Buprenorphine V, Tramadol IV, Ketamine"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "top_results": [
+          "DEA compliance - AAHA",
+          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Self-referential repair (derive the fix from sibling rows) with a web-knowledge fallback branch; tagging only changed rows."
+  }
+}

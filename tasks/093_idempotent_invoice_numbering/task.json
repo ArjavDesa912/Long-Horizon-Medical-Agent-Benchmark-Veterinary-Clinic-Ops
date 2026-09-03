@@ -1,0 +1,53 @@
+{
+  "task_id": "093_idempotent_invoice_numbering",
+  "name": "veterinary_clinic_system_093_idempotent_invoice_numbering",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "idempotency",
+  "surface": "backend",
+  "instruction": "Every invoice must have a canonical public_ref derived deterministically: 'PUB-<invoice_number>'. Set public_ref on every invoice that lacks it or has a wrong value. Rows already correct must remain byte-identical (do NOT rewrite updated_at by no-op updates). Then create exactly one ops_reports row {report: 'public_ref_backfill', batch_code, backfilled: <count of rows you changed>, total: <invoice count>} \u2014 but if a report row with this episode's batch_code already exists for report 'public_ref_backfill', update it instead of inserting a second one.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 12,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Assert every invoice has public_ref=='PUB-'+invoice_number and rows needing no change are byte-identical to snapshot; assert EXACTLY ONE ops_reports row for report 'public_ref_backfill' + this nonce with correct counts. (QC runs gold twice: backfilled must be 0 on the second run and still one report row \u2014 the report count differs per pass, so the verifier accepts backfilled in {0, K_expected} with total exact.)",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Assert every invoice has public_ref=='PUB-'+invoice_number and rows needing no change are byte-identical to snapshot; assert EXACTLY ONE ops_reports row for report 'public_ref_backfill' + this nonce w"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Idempotent upsert of BOTH data and its own report row; no-op update detection via byte-identity (updated_at drift fails)."
+  }
+}

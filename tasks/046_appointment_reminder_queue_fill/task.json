@@ -1,0 +1,52 @@
+{
+  "task_id": "046_appointment_reminder_queue_fill",
+  "name": "veterinary_clinic_system_046_appointment_reminder_queue_fill",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "workflow",
+  "surface": "frontend",
+  "instruction": "Tomorrow's appointment reminders, batched. For every appointment with status 'scheduled' or 'confirmed' whose appointment_date equals the episode date + 1 day, push one reminder_queue row: {kind: 'appointment_reminder', patient_id, owner_id: <the patient's owner>, message: 'See you tomorrow at <start_time> for <PatientName>.', status: 'queued', queued_by: 'system', queued_at: episode timestamp, due_date: <the appointment date>}. Skip appointments for patients that already appear in ANY queued reminder_queue row. Seeded rows untouched.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 11,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_reminder_queue"
+  ],
+  "success_criteria": {
+    "summary": "Expected = scheduled/confirmed appointments with dp(date)==ep+1d, excluding patients in any snapshot queued reminder. Assert exact rows incl. owner join and message format; total == 4 + E; seeded 4 unchanged.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Expected = scheduled/confirmed appointments with dp(date)==ep+1d, excluding patients in any snapshot queued reminder. Assert exact rows incl. owner join and message format; total == 4 + E; seeded 4 un"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Day-precision targeting (exactly tomorrow, not 'future') plus an anti-duplication exclusion against live queue state."
+  }
+}

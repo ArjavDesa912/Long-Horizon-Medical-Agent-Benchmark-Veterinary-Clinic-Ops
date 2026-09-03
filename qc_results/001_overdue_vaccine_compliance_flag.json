@@ -1,0 +1,61 @@
+{
+  "task_id": "001_overdue_vaccine_compliance_flag",
+  "runs": {
+    "noop": {
+      "exit": 1,
+      "stdout_tail": [
+        "FAIL: vaccination 1 compliance_flag: expected 'current', found None"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.9
+    },
+    "random": {
+      "exit": 1,
+      "stdout_tail": [
+        "FAIL: vaccination 1 compliance_flag: expected 'current', found None"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.2
+    },
+    "hardcode": {
+      "exit": 1,
+      "stdout_tail": [
+        "FAIL: vaccination 1 compliance_flag: expected 'current', found None"
+      ],
+      "stderr_tail": [],
+      "seconds": 15.3
+    },
+    "gold": {
+      "exit": 0,
+      "stdout_tail": [],
+      "stderr_tail": [],
+      "seconds": 1.7
+    },
+    "verify_after_gold": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 5.4
+    },
+    "verify_idempotent": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.3
+    }
+  },
+  "reset_seconds": 16.5,
+  "nonce": "EP-8452AFF3",
+  "verdicts": {
+    "noop_fail": true,
+    "random_fail": true,
+    "hardcode_fail": true,
+    "gold_pass": true,
+    "idempotent_pass": true
+  },
+  "pass": true
+}

@@ -1,0 +1,52 @@
+{
+  "task_id": "085_reminder_staleness_sweep",
+  "name": "veterinary_clinic_system_085_reminder_staleness_sweep",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "delete",
+  "surface": "backend",
+  "instruction": "Queued reminders go stale. Delete every reminder_queue row with status 'queued' whose queued_at is more than 14 days before the episode date. Rows with other statuses, and fresh queued rows, remain byte-identical.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_reminder_queue"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: queued rows with (ep - queued_at).days > 14 must be ABSENT; all other rows byte-identical; count == 4 - K.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: queued rows with (ep - queued_at).days > 14 must be ABSENT; all other rows byte-identical; count == 4 - K."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Conditional delete where the predicate uses a timestamp the agent must age against the episode nonce; blanket-deleting queued rows fails."
+  }
+}

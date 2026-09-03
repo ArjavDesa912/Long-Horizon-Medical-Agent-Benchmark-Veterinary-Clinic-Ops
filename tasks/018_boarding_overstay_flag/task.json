@@ -1,0 +1,52 @@
+{
+  "task_id": "018_boarding_overstay_flag",
+  "name": "veterinary_clinic_system_018_boarding_overstay_flag",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "repair",
+  "surface": "backend",
+  "instruction": "Guests still checked in past their scheduled check_out are overstays. For every reservation with status 'checked_in' whose check_out is strictly before the episode date, set status to 'overstay' and add overstay_days = <whole days between check_out and the episode date>. Reservations checking out exactly on the episode date are NOT overstays. Do not touch runs or other reservations.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_boarding_reservations"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: checked_in with dp(check_out)<ep -> assert status=='overstay' and overstay_days==(ep-check_out).days; boundary row (==ep) must remain 'checked_in'; all other rows unchanged; count 14.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: checked_in with dp(check_out)<ep -> assert status=='overstay' and overstay_days==(ep-check_out).days; boundary row (==ep) must remain 'checked_in'; all other rows unchanged; count 14."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Strict-vs-inclusive boundary (checkout on the day itself is not an overstay) \u2014 the classic off-by-one."
+  }
+}

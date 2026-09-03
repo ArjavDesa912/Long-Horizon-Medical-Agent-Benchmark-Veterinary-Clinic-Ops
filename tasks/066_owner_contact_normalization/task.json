@@ -1,0 +1,52 @@
+{
+  "task_id": "066_owner_contact_normalization",
+  "name": "veterinary_clinic_system_066_owner_contact_normalization",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "update",
+  "surface": "backend",
+  "instruction": "Normalize owner contact data for the SMS gateway: rewrite every owner's phone to E.164-ish digits-only form '+1' followed by the 10 digits (strip punctuation; all seeded numbers are US 10-digit like '(828) 555-0101'), and lowercase every owner's email. Add field contact_normalized='<batch_code>' to every row you change. Rows already compliant keep their values but still get the tag. Do not change names, addresses, or balances.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_owners"
+  ],
+  "success_criteria": {
+    "summary": "For each snapshot owner: expected phone '+1'+digits(10), email lower. Assert exact values + tag on ALL 22 rows (all seeded phones have punctuation); assert other fields unchanged; count 22.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "For each snapshot owner: expected phone '+1'+digits(10), email lower. Assert exact values + tag on ALL 22 rows (all seeded phones have punctuation); assert other fields unchanged; count 22."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Deterministic string normalization across a whole collection; the digits-only transform must preserve the area code correctly."
+  }
+}

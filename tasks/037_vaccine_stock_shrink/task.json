@@ -1,0 +1,58 @@
+{
+  "task_id": "037_vaccine_stock_shrink",
+  "name": "veterinary_clinic_system_037_vaccine_stock_shrink",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "update",
+  "surface": "backend",
+  "instruction": "Stock-shrink adjustment: an audit found every location's vaccine stock (item_name containing 'vaccine', case-sensitive) overcounted. Reduce each such row's quantity_on_hand by ops_meta.shrink_pct PERCENT (round DOWN to whole units), and add field shrink_adjusted='<batch_code>'. Non-vaccine rows must remain byte-identical.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code",
+    "extra_fields": {
+      "shrink_pct": {
+        "min": 5,
+        "max": 20
+      }
+    }
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_pharmacy_inventory"
+  ],
+  "success_criteria": {
+    "summary": "Read shrink_pct from ops_meta. From snapshot: rows with 'vaccine' in item_name -> expected qty = floor(qty*(100-pct)/100); assert exact ints + shrink_adjusted==nonce; all other rows byte-identical.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Read shrink_pct from ops_meta. From snapshot: rows with 'vaccine' in item_name -> expected qty = floor(qty*(100-pct)/100); assert exact ints + shrink_adjusted==nonce; all other rows byte-identical."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "top_results": [
+          "DEA compliance - AAHA",
+          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Per-episode randomized percentage with floor rounding; substring (not category) selection."
+  }
+}

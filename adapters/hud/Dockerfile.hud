@@ -1,0 +1,35 @@
+# Adapted from the template `hud init` writes (hud/cli/templates.py in the
+# `hud` PyPI package, v0.6.15) — this environment additionally needs to launch
+# a SIBLING container (the vet-clinic app image) from inside this one, so it
+# needs the `docker` CLI and access to a Docker socket. See README.md.
+#
+# BUILD CONTEXT MUST BE THE REPO ROOT (not this adapters/hud/ directory),
+# because env.py here imports the reference ../../env.py by relative path:
+#
+#   docker build -f adapters/hud/Dockerfile.hud -t vet-clinic-hud-env .
+
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+# Preserve the repo's relative layout so env.py's `parent.parent` lookup
+# (adapters/hud/env.py -> repo root) resolves the same way it does on disk.
+COPY env.py test_env.py ./
+COPY tasks ./tasks
+COPY tools ./tools
+COPY adapters/hud/pyproject.toml adapters/hud/uv.lock* ./adapters/hud/
+WORKDIR /app/adapters/hud
+RUN pip install uv && uv sync --frozen --no-dev 2>/dev/null || uv sync --no-dev
+COPY adapters/hud/. .
+
+EXPOSE 8765
+# Requires: docker run ... -v /var/run/docker.sock:/var/run/docker.sock
+# (this container launches rl-env/veterinary_clinic_system:latest as a
+# sibling, exactly like the reference env.py does when run on a bare host).
+CMD ["uv", "run", "hud", "serve", "env:env", "--host", "0.0.0.0", "--port", "8765"]

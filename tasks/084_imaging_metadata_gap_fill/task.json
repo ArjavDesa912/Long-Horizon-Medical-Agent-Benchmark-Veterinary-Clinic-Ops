@@ -1,0 +1,52 @@
+{
+  "task_id": "084_imaging_metadata_gap_fill",
+  "name": "veterinary_clinic_system_084_imaging_metadata_gap_fill",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "repair",
+  "surface": "backend",
+  "instruction": "Every files row's path must follow the convention '<patient_id>/<date-or-doctype>/<filename>' and patient_id must match the patient_id field. Find rows where path does not START WITH '<patient_id>/' and repair the path minimally: prepend '<patient_id>/' to the existing path. Add field path_fixed='<batch_code>' to repaired rows. Compliant rows stay byte-identical.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_files"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: rows where not path.startswith(f\"{patient_id}/\") -> expected path = f\"{patient_id}/\" + old_path; assert exact + tag; others byte-identical; count 8.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: rows where not path.startswith(f\"{patient_id}/\") -> expected path = f\"{patient_id}/\" + old_path; assert exact + tag; others byte-identical; count 8."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Minimal-diff path repair (prepend, not rebuild); agents regenerate whole paths and lose the date/doctype segment."
+  }
+}

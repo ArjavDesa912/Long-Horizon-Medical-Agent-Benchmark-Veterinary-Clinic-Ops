@@ -1,0 +1,53 @@
+{
+  "task_id": "029_owner_payment_plan_split",
+  "name": "veterinary_clinic_system_029_owner_payment_plan_split",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "workflow",
+  "surface": "backend",
+  "instruction": "The owner with the single largest unpaid overdue invoice asks to split it into two equal payments. Find that invoice (status 'overdue' or 'sent' past due; if tied on amount, pick the lower invoice number). Then: (1) mark the original invoice status 'split' and add field split_into='<batch_code>-A,<batch_code>-B'; (2) create two new invoices numbered 'INV-S<batch_code>-A' and 'INV-S<batch_code>-B', each with the same owner/patient/location as the original, line_items=[{description: 'Payment plan part A of INV-<original number>' (or part B), quantity: 1, unit_price: <half the original unpaid balance \u2014 round A DOWN to whole cents and give B the remainder so A+B equals the original exactly>}], total_amount equal to that part's unit_price, amount_paid 0, status 'sent', issued_date = episode date, due_date = episode date + 14 days for A and + 28 days for B. The owner's balance stays exactly as it was.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 50,
+  "par_steps": 14,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_owners"
+  ],
+  "success_criteria": {
+    "summary": "Identify target from snapshot (max unpaid among overdue or sent-with-due<ep; tie -> lower number). Assert original status 'split' + exact split_into; exactly two new invoices with exact numbers/amounts (A=floor(half), B=remainder; cents exact), dp(due_date) == ep+14 / ep+28; owner balance unchanged (cents vs snapshot); invoice count 28.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Identify target from snapshot (max unpaid among overdue or sent-with-due<ep; tie -> lower number). Assert original status 'split' + exact split_into; exactly two new invoices with exact numbers/amount"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "top_results": [
+          "Account for receivables with a written policy - dvm360",
+          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
+          "Effective credit & collection techniques - dvm360"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Rounding-down/remainder split arithmetic with exact cent conservation, nonce-derived numbering, and a no-net-balance-change invariant."
+  }
+}

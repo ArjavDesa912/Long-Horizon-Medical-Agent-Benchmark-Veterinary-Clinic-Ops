@@ -1,0 +1,54 @@
+{
+  "task_id": "062_transfer_approval_flow",
+  "name": "veterinary_clinic_system_062_transfer_approval_flow",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "workflow",
+  "surface": "frontend",
+  "instruction": "Process the transfer queue the way the Locations \u2192 Transfers screen does. For every location_transfers row with status 'pending' whose note does NOT contain the word 'Specialist' (specialist referrals stay pending for the medical director): set status 'completed', completed_at = episode timestamp; rewrite the patient's location_id to the transfer's to_location_id; and append one audit_log row {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'TRANSFER_COMPLETED', target_collection: 'patients', target_id: <patient id as string>, details: 'Transfer completed <batch_code>: loc <from> -> loc <to>.', occurred_at: episode timestamp}. The already-'approved' transfer is out of scope for this queue and stays untouched.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 12,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_location_transfers",
+    "veterinary_clinic_system_patients",
+    "veterinary_clinic_system_audit_log"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: pending transfers without 'Specialist' in note (2 of 3). For each: status completed + completed_at; patient.location_id == to_location_id; one audit row exact. Assert approved transfer + 'Specialist' pending byte-identical; patients otherwise unchanged; audit count 4+2.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: pending transfers without 'Specialist' in note (2 of 3). For each: status completed + completed_at; patient.location_id == to_location_id; one audit row exact. Assert approved transfer "
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Three-collection cascade with a text-based exclusion ('Specialist' notes) and an out-of-scope decoy status ('approved')."
+  }
+}

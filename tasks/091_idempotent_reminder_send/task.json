@@ -1,0 +1,52 @@
+{
+  "task_id": "091_idempotent_reminder_send",
+  "name": "veterinary_clinic_system_091_idempotent_reminder_send",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "idempotency",
+  "surface": "backend",
+  "instruction": "Run the vaccination reminder batch such that running it TWICE is safe. For each patient with an overdue vaccination (due_date strictly before episode date) and no existing reminder_queue row with dedupe_key='vac-<patient_id>-<batch_code>', push one row {kind: 'vaccination_due', patient_id, due_date: <oldest overdue due>, message: 'Overdue vaccination reminder <batch_code>', status: 'queued', queued_by: 'system', queued_at: episode timestamp, dedupe_key: 'vac-<patient_id>-<batch_code>'}. Rows that already carry the dedupe_key must not be duplicated or modified.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_reminder_queue"
+  ],
+  "success_criteria": {
+    "summary": "Compute expected overdue set; assert exactly one row per patient with correct dedupe_key (live nonce); assert no patient has 2 rows with the same dedupe_key; seeded rows unchanged; total == 4 + E.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Compute expected overdue set; assert exactly one row per patient with correct dedupe_key (live nonce); assert no patient has 2 rows with the same dedupe_key; seeded rows unchanged; total == 4 + E."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Explicit idempotency key discipline; verifier runs the gold twice to prove no duplication \u2014 agents that blind-insert fail the second pass."
+  }
+}

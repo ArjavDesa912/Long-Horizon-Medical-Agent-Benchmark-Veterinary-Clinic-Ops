@@ -1,0 +1,21 @@
+[project]
+name = "veterinary-clinic-system"
+description = "State-change agent missions against a live vet-clinic REST backend (VibeDB), graded by standalone host-side verifiers. 10 of 100 tasks open; see README.md."
+tags = ["agentic", "tool-use", "long-horizon", "train", "eval"]
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "verifiers>=0.3.1",
+    "datasets>=3.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["veterinary_clinic_system/*.py", "pyproject.toml"]
+
+[tool.verifiers.eval]
+num_examples = 10
+rollouts_per_example = 1

@@ -1,0 +1,52 @@
+{
+  "task_id": "041_noshow_fee_flag",
+  "name": "veterinary_clinic_system_041_noshow_fee_flag",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "update",
+  "surface": "backend",
+  "instruction": "Front-desk cleanup: every appointment with status 'no_show' must carry a follow-up marker. Add field follow_up='call_owner' to each no_show appointment and leave every other appointment byte-identical.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 25,
+  "par_steps": 5,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_appointments"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: no_show rows -> follow_up=='call_owner'; all other appointments byte-identical; count 46.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: no_show rows -> follow_up=='call_owner'; all other appointments byte-identical; count 46."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Baseline surgical update; the byte-identity guard on untouched rows defeats bulk-rewrite hacks."
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "task_id": "099_full_state_reconciliation",
+  "name": "veterinary_clinic_system_099_full_state_reconciliation",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Prove the boarding books balance three ways, in one row. Create one ops_reports row {report: 'boarding_recon', batch_code, occupied_runs: <runs status 'occupied'>, checked_in_reservations: <reservations status 'checked_in'>, runs_with_occupant_field: <runs with non-null current_patient_id>, consistent: <true iff occupied_runs == checked_in_reservations AND every occupied run's current_patient_id equals its checked_in reservation's patient>, mismatch_run_ids: <comma-joined ascending ids of runs failing the equality, or ''>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 60,
+  "par_steps": 15,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute from live runs + reservations; assert exact ints/bool/CSV; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute from live runs + reservations; assert exact ints/bool/CSV; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Three-way consistency proof with a mismatch listing; agents assert counts and skip the per-run occupant equality."
+  }
+}

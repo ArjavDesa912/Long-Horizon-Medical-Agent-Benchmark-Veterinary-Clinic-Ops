@@ -1,0 +1,63 @@
+{
+  "task_id": "011_boarding_checkin_flow",
+  "runs": {
+    "noop": {
+      "exit": 1,
+      "stdout_tail": [
+        "FAIL: reservation 7 status: expected 'checked_in', found 'reserved'"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.9
+    },
+    "random": {
+      "exit": 1,
+      "stdout_tail": [
+        "FAIL: reservation 7 status: expected 'checked_in', found 'reserved'"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.2
+    },
+    "hardcode": {
+      "exit": 1,
+      "stdout_tail": [
+        "FAIL: reservation 7 status: expected 'checked_in', found 'reserved'"
+      ],
+      "stderr_tail": [],
+      "seconds": 1.2
+    },
+    "gold": {
+      "exit": 0,
+      "stdout_tail": [
+        "gold done in 3 API calls"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.9
+    },
+    "verify_after_gold": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.2
+    },
+    "verify_idempotent": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 0.2
+    }
+  },
+  "reset_seconds": 20.9,
+  "nonce": "EP-A9366F5E",
+  "verdicts": {
+    "noop_fail": true,
+    "random_fail": true,
+    "hardcode_fail": true,
+    "gold_pass": true,
+    "idempotent_pass": true
+  },
+  "pass": true
+}

@@ -1,0 +1,52 @@
+{
+  "task_id": "086_owner_statement_messages",
+  "name": "veterinary_clinic_system_086_owner_statement_messages",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "create",
+  "surface": "backend",
+  "instruction": "Monthly statements: for every owner whose current balance is greater than 0, push one communications row {channel: 'email', direction: 'outbound', subject: 'Statement ready \u2014 balance $<balance with 2 decimals>', body: 'Your statement for <N> open invoice(s) is ready. Balance $<balance>.', logged_by: 'system', occurred_at: episode timestamp} where N is that owner's count of invoices with status 'sent' or 'overdue' (N may be 0). Owners with zero balance get nothing.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_communications"
+  ],
+  "success_criteria": {
+    "summary": "Recompute owner balances (live) and open-invoice counts; assert exactly one new row per positive-balance owner with exact subject/body formatting (2-decimal money); total == 16 + K; seeded unchanged.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute owner balances (live) and open-invoice counts; assert exactly one new row per positive-balance owner with exact subject/body formatting (2-decimal money); total == 16 + K; seeded unchanged."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Money formatting embedded in two template spots + zero-balance exclusion + a possibly-zero invoice count."
+  }
+}

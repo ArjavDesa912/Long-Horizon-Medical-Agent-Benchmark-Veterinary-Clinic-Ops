@@ -1,0 +1,52 @@
+{
+  "task_id": "027_paid_invoice_receipt_log",
+  "name": "veterinary_clinic_system_027_paid_invoice_receipt_log",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "create",
+  "surface": "backend",
+  "instruction": "The front desk must log a receipt confirmation for every invoice that was paid this calendar month of the episode date. For each invoice with status 'paid' whose issued_date falls in the same calendar month as the episode date, push one communications row to that invoice's owner: channel='email', direction='outbound', subject='Payment receipt INV-<number>', body='Thank you \u2014 INV-<number> paid in full ($<total with 2 decimals>).', logged_by='Front desk (Main St)', occurred_at on the episode date. One row per invoice. Seeded communications stay untouched.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 9,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_communications"
+  ],
+  "success_criteria": {
+    "summary": "Expected = paid invoices with dp(issued_date) in episode month (compare 'YYYY-MM' prefix). Assert exactly one new row each with exact subject/body (money formatted with 2 decimals). Total == 16 + E; seeded rows unchanged.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Expected = paid invoices with dp(issued_date) in episode month (compare 'YYYY-MM' prefix). Assert exactly one new row each with exact subject/body (money formatted with 2 decimals). Total == 16 + E; s"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "top_results": [
+          "Account for receivables with a written policy - dvm360",
+          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
+          "Effective credit & collection techniques - dvm360"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Calendar-month window (not rolling 30 days) + exact money formatting in a string; both are frequent agent errors."
+  }
+}

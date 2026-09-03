@@ -1,0 +1,53 @@
+{
+  "task_id": "020_boarding_deposit_writeoff",
+  "name": "veterinary_clinic_system_020_boarding_deposit_writeoff",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "update",
+  "surface": "websearch",
+  "instruction": "No-show policy time. A 'reserved' reservation whose check_in date has passed (strictly before the episode date) without the guest arriving is a no-show. For each one: set the reservation status to 'cancelled' and add cancellation_reason 'no_show'. Then charge the standard no-show fee the clinic applies \u2014 one night's boarding at that location's BOARD-NIGHT fee-schedule rate \u2014 by INCREASING the owner's balance by exactly that amount (verify typical kennel no-show fee practice online if unsure; one night is the common standard). Owners with multiple no-show reservations are charged once per reservation. Touch nothing else.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 13,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_boarding_reservations",
+    "veterinary_clinic_system_owners"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: reserved reservations with dp(check_in)<ep -> assert cancelled + reason. For each affected owner: assert balance == snapshot balance + fee*count (cents, fee from location fee schedule BOARD-NIGHT). All other owners byte-identical; reservation count 14.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: reserved reservations with dp(check_in)<ep -> assert cancelled + reason. For each affected owner: assert balance == snapshot balance + fee*count (cents, fee from location fee schedule B"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Balance mutation must be additive to a live value (not absolute) and aggregated per owner; fee rate comes from a fee-schedule join, not the instruction."
+  }
+}

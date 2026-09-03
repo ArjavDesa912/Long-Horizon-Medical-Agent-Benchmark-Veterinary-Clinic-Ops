@@ -1,0 +1,52 @@
+{
+  "task_id": "036_inventory_valuation_report",
+  "name": "veterinary_clinic_system_036_inventory_valuation_report",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Finance needs inventory valuation per location. One ops_reports row per location that HAS pharmacy inventory: {report: 'inventory_valuation', batch_code, location_id, medication_value: <sum unit_price*quantity_on_hand for category 'medication' items>, supply_value: <same for 'supply'>, controlled_units: <sum of quantity_on_hand over is_controlled items>, item_count: <rows at that location>}. Money in dollars (numbers).",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute per location from live inventory; cents-exact money, exact counts/units (float tolerance 1e-9); rows == locations present in inventory.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute per location from live inventory; cents-exact money, exact counts/units (float tolerance 1e-9); rows == locations present in inventory."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "top_results": [
+          "DEA compliance - AAHA",
+          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Mixed aggregation (money vs unit counts) with category conditioning; controlled items are category 'medication' AND counted again in controlled_units \u2014 double-counting confusion is intended."
+  }
+}

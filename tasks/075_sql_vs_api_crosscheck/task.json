@@ -1,0 +1,52 @@
+{
+  "task_id": "075_sql_vs_api_crosscheck",
+  "name": "veterinary_clinic_system_075_sql_vs_api_crosscheck",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Trust but verify the SQL endpoint. Compute two ways and report agreement: (a) via GET /v1/query on appointments, count rows per status; (b) via POST /v1/sql/query with SELECT status, COUNT(*) ... GROUP BY status on the same table (veterinary_clinic_system_appointments). Create one ops_reports row {report: 'sql_crosscheck', batch_code, api_counts: <JSON object status->count>, sql_counts: <JSON object status->count>, agree: <true iff identical>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Independently compute counts from live API data; assert api_counts==expected, sql_counts==expected, agree true; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Independently compute counts from live API data; assert api_counts==expected, sql_counts==expected, agree true; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Dual-path verification (REST vs SQL) \u2014 the agent must actually run both channels, and the SQL path is service-admin gated (forces correct credential choice)."
+  }
+}

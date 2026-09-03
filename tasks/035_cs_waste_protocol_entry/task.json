@@ -1,0 +1,53 @@
+{
+  "task_id": "035_cs_waste_protocol_entry",
+  "name": "veterinary_clinic_system_035_cs_waste_protocol_entry",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "workflow",
+  "surface": "frontend",
+  "instruction": "Replicate the Controlled Substances tab's waste workflow: a partially used Ketamine vial, 0.5 units, is being wasted at location 1 by Dr. Chen with Miles Turner witnessing. (1) Append the log row: item_name 'Ketamine', location_id '1', action 'waste', quantity 0.5, witnessed_by 'Miles Turner', performed_by 'Dr. Chen', occurred_at episode timestamp, notes 'Partial vial waste <batch_code>'. (2) Decrement the Ketamine pharmacy_inventory row at location 1 by 0.5 (quantity_on_hand is a float here). No other inventory rows change.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 9,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_controlled_substance_log",
+    "veterinary_clinic_system_pharmacy_inventory"
+  ],
+  "success_criteria": {
+    "summary": "Assert new log row exact (nonce in notes); assert location-1 Ketamine inventory qty == snapshot qty - 0.5 (float tolerance 1e-9); all other inventory rows byte-identical; log count 13.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Assert new log row exact (nonce in notes); assert location-1 Ketamine inventory qty == snapshot qty - 0.5 (float tolerance 1e-9); all other inventory rows byte-identical; log count 13."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "top_results": [
+          "DEA compliance - AAHA",
+          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Log-and-decrement atomicity across collections; float arithmetic on inventory quantity."
+  }
+}

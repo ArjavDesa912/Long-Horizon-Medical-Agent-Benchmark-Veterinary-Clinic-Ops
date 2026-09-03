@@ -1,0 +1,52 @@
+{
+  "task_id": "059_species_visit_mix_report",
+  "name": "veterinary_clinic_system_059_species_visit_mix_report",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "frontend",
+  "instruction": "Produce the data behind the Visits by Species report. One ops_reports row per species that appears among patients with at least one visit: {report: 'visits_by_species', batch_code, species, visits: <count of visit_records whose patient has that species>, distinct_patients: <distinct patients of that species with visits>, pct_of_visits: <round(100*visits/total_visits,1)>}. Any order.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 35,
+  "par_steps": 10,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute via patients join; exact ints; pct within 0.05 each; row set == species present; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute via patients join; exact ints; pct within 0.05 each; row set == species present; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "top_results": [
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
+          "Key Vaccination: Rabies - AAHA",
+          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Join-driven aggregation mirroring the app's report screen; species with zero visits must be absent (not zero-rows)."
+  }
+}

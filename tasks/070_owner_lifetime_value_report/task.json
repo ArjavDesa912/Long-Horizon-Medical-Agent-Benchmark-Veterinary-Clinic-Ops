@@ -1,0 +1,52 @@
+{
+  "task_id": "070_owner_lifetime_value_report",
+  "name": "veterinary_clinic_system_070_owner_lifetime_value_report",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Rank the client base. One ops_reports row per owner: {report: 'owner_ltv', batch_code, owner_id, owner_name, lifetime_revenue: <sum of amount_paid over the owner's PAID invoices, dollars>, open_balance: <sum of (total-paid) over sent/overdue invoices, dollars>, invoice_count: <all non-draft invoices>, pet_count: <patients linked to the owner>}. Include ALL owners, even zeros. Additionally create one row {report: 'owner_ltv_top', batch_code, owner_id, owner_name, lifetime_revenue} for the owner with the highest lifetime_revenue (tie -> lowest owner id).",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 13,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute per owner from live invoices + patients; assert 22 rows + 1 top row; cents-exact; top row matches argmax with tiebreak; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute per owner from live invoices + patients; assert 22 rows + 1 top row; cents-exact; top row matches argmax with tiebreak; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Full-coverage aggregation (zeros included) + a separate argmax row with tiebreak; agents drop zero-owners or mis-tie-break."
+  }
+}

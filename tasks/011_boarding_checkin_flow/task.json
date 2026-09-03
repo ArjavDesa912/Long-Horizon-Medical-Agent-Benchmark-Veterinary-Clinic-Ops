@@ -1,0 +1,61 @@
+{
+  "task_id": "011_boarding_checkin_flow",
+  "name": "veterinary_clinic_system_011_boarding_checkin_flow",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "workflow",
+  "surface": "frontend",
+  "instruction": "Replicate exactly what the boarding Runs board does when staff press Check In on the soonest upcoming reservation: take the 'reserved' boarding reservation with the earliest check_in date, set its status to 'checked_in', and set its run's status to 'occupied' with current_patient_id set to the reservation's patient. Touch nothing else.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 25,
+  "par_steps": 6,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_boarding_reservations",
+    "veterinary_clinic_system_boarding_runs"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: expected reservation = reserved with min dp(check_in). Assert that reservation status=='checked_in'; its run status=='occupied' and current_patient_id==reservation.patient_id (string compare ok). All other reservations/runs byte-identical to snapshot.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: expected reservation = reserved with min dp(check_in). Assert that reservation status=='checked_in'; its run status=='occupied' and current_patient_id==reservation.patient_id (string co"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [
+      {
+        "query": "boarding check-in reservation set run occupied current_patient_id kennel software workflow",
+        "top_results": [
+          "Boarding and grooming | Cornerstone Software quick reference guide (IDEXX PDF)",
+          "andrewRCr/PetResort (GitHub)"
+        ]
+      }
+    ],
+    "differentiation_note": "Two-collection consistency (reservation + run must agree); 'soonest upcoming' requires deriving the argmin, not a named id."
+  }
+}

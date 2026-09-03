@@ -1,0 +1,60 @@
+{
+  "task_id": "006_bordetella_boarding_gate",
+  "name": "veterinary_clinic_system_006_bordetella_boarding_gate",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "update",
+  "surface": "websearch",
+  "instruction": "Clinic policy (standard boarding-kennel practice \u2014 verify online if needed): a dog may not check in for boarding unless its bordetella vaccination stays current through the end of the stay. For every boarding reservation with status 'reserved' whose patient is canine and whose latest bordetella due_date is on or before the reservation's check_out date, set the reservation's status to 'waitlisted_vax' and add a field hold_reason='bordetella lapse before checkout'. Leave every other reservation and field untouched. If a canine patient has no bordetella record at all, treat it as lapsed.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_boarding_reservations"
+  ],
+  "success_criteria": {
+    "summary": "Compute expected set from snapshot: reserved reservations, canine patient, latest bordetella due_date (by patient) <= dp(check_out) OR no bordetella row. Assert those reservations have status=='waitlisted_vax' + exact hold_reason; assert all other reservations byte-identical to snapshot; count stays 14.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Compute expected set from snapshot: reserved reservations, canine patient, latest bordetella due_date (by patient) <= dp(check_out) OR no bordetella row. Assert those reservations have status=='waitli"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "top_results": [
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
+          "Key Vaccination: Rabies - AAHA",
+          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [
+      {
+        "query": "bordetella vaccination required boarding check-in \"waitlisted_vax\" veterinary kennel gate",
+        "top_results": [
+          "Working with kennel vaccine policies - Veterinary Practice News",
+          "Vaccination Records at Your Boarding Kennel: How to Stop Chasing Paperwork | Goodstay"
+        ]
+      }
+    ],
+    "differentiation_note": "Real kennel rule (vaccine must cover the whole stay, not just check-in day) + missing-record-implies-lapsed edge; date-window comparison against checkout, not today."
+  }
+}

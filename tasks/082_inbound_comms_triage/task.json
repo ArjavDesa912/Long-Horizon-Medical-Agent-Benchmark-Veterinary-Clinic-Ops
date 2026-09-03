@@ -1,0 +1,52 @@
+{
+  "task_id": "082_inbound_comms_triage",
+  "name": "veterinary_clinic_system_082_inbound_comms_triage",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "update",
+  "surface": "backend",
+  "instruction": "Triage the comms inbox: add field triage='needs_reply' to every communications row with direction 'inbound', and triage='fyi' to every 'outbound' row. No other changes.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 25,
+  "par_steps": 6,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_communications"
+  ],
+  "success_criteria": {
+    "summary": "All 16 rows have exact triage per direction; all other fields byte-identical; count 16.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "All 16 rows have exact triage per direction; all other fields byte-identical; count 16."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Whole-collection two-class tagging with byte-identity on untouched fields."
+  }
+}

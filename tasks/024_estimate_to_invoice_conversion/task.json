@@ -1,0 +1,54 @@
+{
+  "task_id": "024_estimate_to_invoice_conversion",
+  "name": "veterinary_clinic_system_024_estimate_to_invoice_conversion",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "workflow",
+  "surface": "frontend",
+  "instruction": "Do what the Billing \u2192 Estimates screen's 'Convert to invoice' action does for every estimate with status 'accepted': create a new invoice with invoice_number 'INV-C<batch_code>-<estimate_number digits>' (e.g. EST-3005 -> digits 3005), owner/patient/location copied from the estimate, issued_date = episode date, due_date = episode date + 21 days, line_items copied from the estimate, total_amount = estimate total, amount_paid = 0, status 'sent'; then set the estimate's status to 'converted'; then append one audit_log row per conversion {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'ESTIMATE_CONVERTED', target_collection: 'billing_estimates', target_id: <estimate id as string>, details: 'Converted to invoice INV-C<batch_code>-<digits>', occurred_at: episode timestamp}. Estimates with any other status stay untouched.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 12,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_billing_estimates",
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_audit_log"
+  ],
+  "success_criteria": {
+    "summary": "Accepted estimates from snapshot (2). For each: new invoice with exact fields (nonce-embedded number, cents totals), estimate status 'converted', one matching audit row with exact action/details. Assert counts: invoices 26+2, estimates 10, audit_log 4+2; all other rows unchanged.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Accepted estimates from snapshot (2). For each: new invoice with exact fields (nonce-embedded number, cents totals), estimate status 'converted', one matching audit row with exact action/details. Asse"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "top_results": [
+          "Account for receivables with a written policy - dvm360",
+          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
+          "Effective credit & collection techniques - dvm360"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Three-collection transaction with audit trail and nonce-derived numbering; skipping the audit entry is the common shortcut that fails."
+  }
+}

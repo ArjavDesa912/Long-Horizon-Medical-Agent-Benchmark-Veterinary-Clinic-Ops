@@ -1,0 +1,52 @@
+{
+  "task_id": "068_patient_species_weight_sanity",
+  "name": "veterinary_clinic_system_068_patient_species_weight_sanity",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "repair",
+  "surface": "websearch",
+  "instruction": "Sanity-check patient weights against species-typical ranges (verify typical ranges online if unsure): canine 1\u201390 kg, feline 1\u201315 kg, avian 0.02\u20132 kg, exotic 0.02\u201315 kg, equine 200\u2013700 kg, other 0.02\u2013200 kg. For every patient whose weight_kg falls outside its species range, set weight_flag='out_of_range' and weight_checked='<batch_code>'; for every in-range patient set weight_flag='plausible' (no tag field). Patients with missing weight get weight_flag='missing'. All other fields byte-identical.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 12,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_patients"
+  ],
+  "success_criteria": {
+    "summary": "Recompute expected flag per patient from snapshot weights vs documented ranges; assert exact flag values and tag presence only on out_of_range rows; count 30.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute expected flag per patient from snapshot weights vs documented ranges; assert exact flag values and tag presence only on out_of_range rows; count 30."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Domain-range table (must be applied exactly) + three-way classification with tag-on-one-class-only asymmetry."
+  }
+}

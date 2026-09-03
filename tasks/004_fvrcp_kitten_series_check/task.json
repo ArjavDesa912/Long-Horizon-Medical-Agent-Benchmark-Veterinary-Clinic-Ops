@@ -1,0 +1,60 @@
+{
+  "task_id": "004_fvrcp_kitten_series_check",
+  "name": "veterinary_clinic_system_004_fvrcp_kitten_series_check",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "aggregation",
+  "surface": "websearch",
+  "instruction": "Feline patients whose FVRCP booster will come due within the next 30 days (from the episode date in ops_meta) need a head's-up before the window opens. For every feline patient with an FVRCP vaccination whose due_date falls in (episode_date, episode_date+30 days] and who has NO queued reminder yet, push one reminder_queue row with kind='vaccination_due', status='queued', queued_by='frontdesk@pawsclinic.com', due_date equal to the vaccination's due_date, and message '<PatientName> FVRCP booster due <YYYY-MM-DD> \u2014 book a nurse visit.' Finally, add a summary row with kind='compliance_summary', status='queued', and message='FVRCP due-in-30 count: <N>' where N is the number of reminder rows you created. Cats already covered by a queued vaccination_due reminder must be skipped but still counted in N as zero \u2014 i.e. N counts only rows actually created.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 9,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_reminder_queue"
+  ],
+  "success_criteria": {
+    "summary": "Compute expected set: feline patients (join patients.species) with FVRCP due in (ep, ep+30d]; exclude those with existing queued vaccination_due rows (snapshot). Assert exactly one new row per expected patient with all fields correct (message date uses dp(due_date)). Assert exactly one new compliance_summary row with message count == number of created rows. Assert seeded 4 rows unchanged; total == 4 + N + 1.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Compute expected set: feline patients (join patients.species) with FVRCP due in (ep, ep+30d]; exclude those with existing queued vaccination_due rows (snapshot). Assert exactly one new row per expecte"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "AAFP feline vaccination guidelines FVRCP rabies booster interval adult cat 1 year 3 year",
+        "top_results": [
+          "2020 AAHA/AAFP Feline Vaccination Guidelines (JAAHA PDF)",
+          "2020 AAHA/AAFP Feline Vaccination Guidelines (journals.sagepub.com)",
+          "AAHA Feline Vaccination Guidelines FAQ"
+        ]
+      }
+    ],
+    "uniqueness_searches": [
+      {
+        "query": "FVRCP kitten booster due in 30 days reminder veterinary task",
+        "top_results": [
+          "Kitten Vaccine Schedule & Reminder App | PetsClub",
+          "Kitten Vaccine Schedule Calculator — FVRCP & Rabies | FurCalc"
+        ]
+      }
+    ],
+    "differentiation_note": "Half-open date window + exclusion set + a self-referential summary count row; agents routinely miscount or include excluded patients."
+  }
+}

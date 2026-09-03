@@ -1,0 +1,52 @@
+{
+  "task_id": "049_no_show_rate_report",
+  "name": "veterinary_clinic_system_049_no_show_rate_report",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "One ops_reports row {report: 'no_show_rate', batch_code, past_total: <appointments before the episode date>, past_no_shows: <of those, status 'no_show'>, no_show_pct: <round(100*past_no_shows/past_total, 1)>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute from live appointments vs ep; exact ints, pct within 0.05; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute from live appointments vs ep; exact ints, pct within 0.05; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Date-partitioned rate with rounding; trivial-looking but the pct denominator choice (past-only) is the trap."
+  }
+}

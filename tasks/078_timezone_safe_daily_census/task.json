@@ -1,0 +1,52 @@
+{
+  "task_id": "078_timezone_safe_daily_census",
+  "name": "veterinary_clinic_system_078_timezone_safe_daily_census",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "aggregation",
+  "surface": "websearch",
+  "instruction": "All three clinics operate in the America/New_York timezone (see the locations collection). Using that timezone (verify its UTC offset handling if unsure), compute the daily census: for the EPISODE DATE as seen in America/New_York, one ops_reports row {report: 'daily_census', batch_code, census_date: '<YYYY-MM-DD in ET>', appointments_that_day: <appointments whose appointment_date equals it>, boarding_guests_that_day: <checked_in reservations whose stay covers it (check_in <= date <= check_out)>, new_invoices_that_day: <invoices issued that day>}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 12,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Compute ET date from episode timestamp (UTC-4/EDT in summer; derive via zoneinfo 'America/New_York'); recompute three counts vs that date; assert exact row; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Compute ET date from episode timestamp (UTC-4/EDT in summer; derive via zoneinfo 'America/New_York'); recompute three counts vs that date; assert exact row; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Timezone conversion (UTC episode instant -> ET calendar date) before date equality \u2014 agents compare in UTC and miss boundary rows."
+  }
+}

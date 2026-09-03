@@ -1,0 +1,56 @@
+{
+  "task_id": "100_grand_daily_closeout",
+  "name": "veterinary_clinic_system_100_grand_daily_closeout",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "workflow",
+  "surface": "frontend",
+  "instruction": "The full end-of-day closeout the practice manager runs, batched under the episode batch code: (1) reflag invoices: 'sent' with due_date strictly before the episode date become 'overdue'; (2) flush the queue: every reminder_queue row with status 'queued' becomes 'sent' with sent_on = episode date; (3) close the boarding day: for each checked_in reservation ensure an episode-date boarding_daily_log row exists (create with all care booleans false, notes 'closeout <batch_code>', logged_by 'system' if missing; leave existing rows alone); (4) write the summary: one ops_reports row {report: 'daily_closeout', batch_code, invoices_flagged: <count changed in step 1>, reminders_sent: <count changed in step 2>, boarding_rows_created: <count created in step 3>, episode_date: '<YYYY-MM-DD>'}; (5) one audit_log row {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'DAILY_CLOSEOUT', target_collection: 'ops_reports', target_id: 'daily_closeout', details: 'Closeout <batch_code>: <invoices_flagged>i/<reminders_sent>r/<boarding_rows_created>b', occurred_at: episode timestamp}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 70,
+  "par_steps": 18,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_boarding_daily_log",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
+  ],
+  "success_criteria": {
+    "summary": "Replay all five steps from snapshot; assert invoice reflog set exact, queue flush exact (sent_on dp==ep), boarding upserts exact, summary numbers == actual mutation counts, audit row exact with nonce; all other rows byte-identical.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Replay all five steps from snapshot; assert invoice reflog set exact, queue flush exact (sent_on dp==ep), boarding upserts exact, summary numbers == actual mutation counts, audit row exact with nonce;"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Five-phase composite where the summary/audit rows must agree with the actual mutations (self-consistency), plus idempotent boarding upsert \u2014 the capstone."
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "task_id": "015_run_maintenance_rebalance",
+  "name": "veterinary_clinic_system_015_run_maintenance_rebalance",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "update",
+  "surface": "backend",
+  "instruction": "The kennel needs a deep-clean rotation. At each location, take the lowest-numbered AVAILABLE kennel run (run_type 'kennel') and set its status to 'maintenance'. Additionally, at the location that currently has the MOST occupied runs, also set the highest-numbered available 'large_dog' run to 'maintenance' if one exists there. Do not touch occupied or cleaning runs, and make no other changes.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 9,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_boarding_runs"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot compute per location: min run_number among available kennel runs (string sort of run_number is fine \u2014 K01..K08 zero-padded) -> must be 'maintenance'. Location with most occupied runs (snapshot) -> its max-numbered available large_dog run (if any) must be 'maintenance'. All other runs unchanged. Assert exactly (3 or 4) runs changed status to maintenance.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot compute per location: min run_number among available kennel runs (string sort of run_number is fine \u2014 K01..K08 zero-padded) -> must be 'maintenance'. Location with most occupied runs (sn"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [
+      {
+        "query": "kennel run maintenance rebalance deep-clean rotation boarding software task",
+        "top_results": [
+          "Dog Boarding Software for UK Kennels | MyPetCare",
+          "Veterinary Boarding Kennel Cleaning Rotation Scheduler | RationalGo App Builder"
+        ]
+      }
+    ],
+    "differentiation_note": "Two-level conditional (per-location argmin + global argmax side rule); picking by run_number string vs numeric is the trap."
+  }
+}

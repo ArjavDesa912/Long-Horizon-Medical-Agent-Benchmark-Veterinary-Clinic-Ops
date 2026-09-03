@@ -1,0 +1,60 @@
+{
+  "task_id": "002_rabies_booster_due_recompute",
+  "name": "veterinary_clinic_system_002_rabies_booster_due_recompute",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "update",
+  "surface": "websearch",
+  "instruction": "A data-import glitch wiped the due dates on all rabies vaccinations for canine patients. Recompute and set the due_date for every rabies vaccination belonging to a canine patient as exactly 1 year after its administered_date (per the AAHA canine vaccination guideline that a rabies booster follows the initial dose by 1 year \u2014 look this up if unsure). Leave feline/other-species rabies rows and every other field untouched. Write dates as ISO timestamps at midnight UTC (YYYY-MM-DDT00:00:00.000Z).",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_vaccinations"
+  ],
+  "success_criteria": {
+    "summary": "Fetch vaccinations + patients. For each vaccination with vaccine_type=='rabies' whose patient species=='canine': expected due = dp(administered_date)+1yr (same month/day; use dateutil-free arithmetic via datetime with year+1, guarding Feb 29 -> Feb 28). Assert dp(due_date)==expected. Assert all other vaccination rows byte-identical to snapshot (strip nothing \u2014 these rows must be unmodified; compare via canon of non-target rows vs snapshot non-target rows). Assert count 60.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Fetch vaccinations + patients. For each vaccination with vaccine_type=='rabies' whose patient species=='canine': expected due = dp(administered_date)+1yr (same month/day; use dateutil-free arithmetic "
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "top_results": [
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
+          "Key Vaccination: Rabies - AAHA",
+          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [
+      {
+        "query": "recompute rabies booster due date 1 year after administered veterinary data task",
+        "top_results": [
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
+          "Manually change the due date of a care service | ezyVet Knowledge Center"
+        ]
+      }
+    ],
+    "differentiation_note": "Requires external guideline knowledge (AAHA 1-year rabies booster) combined with a species join; date-arithmetic edge cases (leap day) make naive hardcoding brittle."
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "task_id": "064_microchip_format_audit",
+  "name": "veterinary_clinic_system_064_microchip_format_audit",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "repair",
+  "surface": "websearch",
+  "instruction": "Audit microchip registrations against ISO 11784 (15 numeric digits \u2014 verify online if unsure). For every patient whose microchip_id is missing, null, or not exactly 15 digits, set microchip_flag='non_compliant' and microchip_flagged='<batch_code>'. Compliant patients stay byte-identical; do not invent new chip numbers.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 9,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_patients"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: patients failing regex ^\\d{15}$ -> flagged with nonce; others byte-identical; count 30.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: patients failing regex ^\\d{15}$ -> flagged with nonce; others byte-identical; count 30."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "ISO 11784 pet microchip 15 digit format country code 985 manufacturer",
+        "top_results": [
+          "Manufacturer's ISO Codes (Alberta Animal Health Source PDF)",
+          "ISO 11784:2024 Code structure (ISO preview)",
+          "Microchipping - The Importance of ISO (WSAVA PDF)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Format validation from an external standard; flag-without-inventing is the discipline under test."
+  }
+}

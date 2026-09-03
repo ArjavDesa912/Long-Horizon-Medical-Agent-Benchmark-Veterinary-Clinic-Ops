@@ -1,0 +1,52 @@
+{
+  "task_id": "077_data_freshness_report",
+  "name": "veterinary_clinic_system_077_data_freshness_report",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "How stale is each collection? One ops_reports row {report: 'data_freshness', batch_code, oldest_collection: '<short name (without prefix) of the collection whose newest updated_at is oldest>', newest_collection: '<short name whose newest updated_at is newest>', checked: <number of collections checked>}. Consider all 24 seeded collections (exclude ops_meta and ops_reports).",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute max(updated_at) per collection from live data; assert exact names and checked==24; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute max(updated_at) per collection from live data; assert exact names and checked==24; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Meta-aggregation across ALL collections (24 queries); agents check only the collections they already know."
+  }
+}

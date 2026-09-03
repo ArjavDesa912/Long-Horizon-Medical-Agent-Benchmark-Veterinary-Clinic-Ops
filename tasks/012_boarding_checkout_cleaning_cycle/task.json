@@ -1,0 +1,61 @@
+{
+  "task_id": "012_boarding_checkout_cleaning_cycle",
+  "name": "veterinary_clinic_system_012_boarding_checkout_cleaning_cycle",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "workflow",
+  "surface": "frontend",
+  "instruction": "Process departure for the checked-in boarding guest whose check_out date is earliest: set that reservation's status to 'checked_out', and move its run through the standard turnover \u2014 status 'cleaning' with current_patient_id cleared to null. Other guests stay put; touch no other rows.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 25,
+  "par_steps": 7,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_boarding_reservations",
+    "veterinary_clinic_system_boarding_runs"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: checked_in reservations; expected = min dp(check_out). Assert reservation checked_out; run status=='cleaning' and current_patient_id null/empty. All other rows unchanged vs snapshot.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: checked_in reservations; expected = min dp(check_out). Assert reservation checked_out; run status=='cleaning' and current_patient_id null/empty. All other rows unchanged vs snapshot."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [
+      {
+        "query": "boarding checkout run status cleaning turnover veterinary kennel management task",
+        "top_results": [
+          "Pet Boarding Management Software | PetConnect",
+          "Veterinary Boarding Kennel Cleaning Rotation Scheduler | RationalGo App Builder"
+        ]
+      }
+    ],
+    "differentiation_note": "Turnover state machine (occupied\u2192cleaning, not straight to available) matches real kennel practice; nulling the occupant is the step agents skip."
+  }
+}

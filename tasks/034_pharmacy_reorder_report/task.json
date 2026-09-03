@@ -1,0 +1,52 @@
+{
+  "task_id": "034_pharmacy_reorder_report",
+  "name": "veterinary_clinic_system_034_pharmacy_reorder_report",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Purchasing wants the reorder list. Create one ops_reports row per pharmacy inventory item whose quantity_on_hand is at or below its reorder_level: {report: 'reorder_list', batch_code, item_name, location_id, quantity_on_hand, reorder_level, suggested_order: <reorder_level*2 - quantity_on_hand>}. Any order; exactly the qualifying items, no others.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 25,
+  "par_steps": 7,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute qualifying items from live inventory (qty <= reorder). Assert one row per qualifying (item, location) with exact ints; count exact; nonce correct.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute qualifying items from live inventory (qty <= reorder). Assert one row per qualifying (item, location) with exact ints; count exact; nonce correct."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "top_results": [
+          "DEA compliance - AAHA",
+          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "At-or-below boundary (<=) and a computed order quantity; off-by-one on the boundary is the classic miss."
+  }
+}

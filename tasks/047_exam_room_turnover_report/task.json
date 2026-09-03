@@ -1,0 +1,52 @@
+{
+  "task_id": "047_exam_room_turnover_report",
+  "name": "veterinary_clinic_system_047_exam_room_turnover_report",
+  "version": "1.0.0",
+  "difficulty": "easy",
+  "category": "aggregation",
+  "surface": "backend",
+  "instruction": "Which exam rooms carried the load? One ops_reports row {report: 'room_usage', batch_code, per_room: <JSON object mapping room name -> total appointment count across ALL appointments at all locations>, busiest_room: <room with the most appointments; tie -> alphabetically first>}. Exactly one row.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 30,
+  "par_steps": 8,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
+  "success_criteria": {
+    "summary": "Recompute counts from live appointments; assert per_room object exact (dict compare), busiest_room correct with alpha tiebreak; nonce.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Recompute counts from live appointments; assert per_room object exact (dict compare), busiest_room correct with alpha tiebreak; nonce."
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Nested-JSON report field with deterministic tiebreak; tests structured-output fidelity."
+  }
+}

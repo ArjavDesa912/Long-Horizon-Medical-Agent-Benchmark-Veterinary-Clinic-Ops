@@ -1,0 +1,53 @@
+{
+  "task_id": "042_waitlist_promotion",
+  "name": "veterinary_clinic_system_042_waitlist_promotion",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "workflow",
+  "surface": "frontend",
+  "instruction": "A cancellation opened a slot: location 1, Exam 1, the episode date at 09:00\u201309:30 with Dr. Elena Alvarez (provider id 1). Promote the HIGHEST-priority waiting waitlist entry at location 1 (priority order: urgent > work_in > routine; break ties by earliest created_at) into a real appointment: create the appointment {patient_id from the waitlist entry, provider_id '1', location_id '1', room 'Exam 1', appointment_date = episode date, start_time '09:00', end_time '09:30', reason = the waitlist entry's reason, status 'scheduled'}, and set that waitlist entry's status to 'booked'. Other waitlist entries stay 'waiting'.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 11,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_waitlist",
+    "veterinary_clinic_system_appointments"
+  ],
+  "success_criteria": {
+    "summary": "From snapshot: location-1 waiting entries; expected winner = min by (priority rank, created_at). Assert new appointment exact fields; winner status 'booked'; other waitlist rows unchanged; appointments 47, waitlist 6.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "From snapshot: location-1 waiting entries; expected winner = min by (priority rank, created_at). Assert new appointment exact fields; winner status 'booked'; other waitlist rows unchanged; appointment"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Priority-rank ordering with a timestamp tiebreak; agents often take the first row or use wrong rank order."
+  }
+}

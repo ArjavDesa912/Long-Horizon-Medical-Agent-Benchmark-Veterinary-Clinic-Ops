@@ -1,0 +1,52 @@
+{
+  "task_id": "050_schedule_density_rebalance",
+  "name": "veterinary_clinic_system_050_schedule_density_rebalance",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "workflow",
+  "surface": "backend",
+  "instruction": "Balance the books at location 1. Find the future date (on/after episode date) with the most scheduled-or-confirmed appointments at location 1 \u2014 the 'overloaded' day (tie -> earliest date). If that day has strictly more than 4 such appointments, move its LATEST-starting scheduled appointment to the future date at location 1 with the FEWEST scheduled-or-confirmed appointments (tie -> earliest date), keeping the same start_time/end_time/room, and set rebalanced='<batch_code>' on the moved row. If no day exceeds 4, change nothing and instead create an ops_reports row {report: 'rebalance', batch_code, moved: 0}.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 50,
+  "par_steps": 14,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_appointments"
+  ],
+  "success_criteria": {
+    "summary": "Replay the rule from snapshot: compute overloaded day, sparsest day; if triggered, assert exactly one row differs (moved to expected date, tagged nonce) and all else byte-identical; else assert the no-op report row exists and appointments unchanged.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Replay the rule from snapshot: compute overloaded day, sparsest day; if triggered, assert exactly one row differs (moved to expected date, tagged nonce) and all else byte-identical; else assert the no"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Two arg-extremes with deterministic tiebreaks and a conditional no-op branch \u2014 agents must evaluate the guard, not assume it fires."
+  }
+}

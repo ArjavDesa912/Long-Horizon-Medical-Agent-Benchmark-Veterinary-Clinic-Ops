@@ -1,0 +1,52 @@
+{
+  "task_id": "092_idempotent_occupancy_sync",
+  "name": "veterinary_clinic_system_092_idempotent_occupancy_sync",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "idempotency",
+  "surface": "frontend",
+  "instruction": "Sync the boarding board so runs exactly mirror the reservation book, idempotently: after your changes, a run must be 'occupied' with current_patient_id set IFF a checked_in reservation references it (patient from that reservation); runs with no checked_in reservation must be 'available' with current_patient_id null \u2014 EXCEPT runs whose status is 'maintenance', which stay 'maintenance' with null occupant. Add field synced='<batch_code>' ONLY to runs you actually changed. Running the sync twice must change nothing the second time (the tag must already match the current batch_code \u2014 do not re-stamp).",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 40,
+  "par_steps": 12,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_boarding_runs"
+  ],
+  "success_criteria": {
+    "summary": "Compute expected run state from live reservations; assert invariant holds for all 17 runs; assert synced tags == nonce on exactly the diff set computed from snapshot; all other runs byte-identical. QC: gold twice -> second pass zero changes (verified by rerunning verifier and by identical hashes).",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Compute expected run state from live reservations; assert invariant holds for all 17 runs; assert synced tags == nonce on exactly the diff set computed from snapshot; all other runs byte-identical. QC"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Convergent sync with change-only tagging \u2014 second-run no-op is directly verified; over-eager re-tagging fails."
+  }
+}

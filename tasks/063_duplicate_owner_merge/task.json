@@ -1,0 +1,56 @@
+{
+  "task_id": "063_duplicate_owner_merge",
+  "name": "veterinary_clinic_system_063_duplicate_owner_merge",
+  "version": "1.0.0",
+  "difficulty": "hard",
+  "category": "repair",
+  "surface": "frontend",
+  "instruction": "Merge duplicate owner records the way the Owners screen's merge tool should. Two owners are duplicates iff their normalized phone numbers match (digits only) OR their emails match case-insensitively. For each duplicate PAIR in the seeded data: keep the record with the earlier created_at (the survivor), repoint all patients, invoices, and communications from the duplicate to the survivor, add the duplicate's balance to the survivor's, then delete the duplicate owner row and add merged_into='<survivor id>' audit trail by pushing one audit_log row {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'OWNER_MERGE', target_collection: 'owners', target_id: <deleted owner id as string>, details: 'Merged into owner <survivor id> (<batch_code>)', occurred_at: episode timestamp}. If no duplicates exist, change nothing.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 60,
+  "par_steps": 16,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_owners",
+    "veterinary_clinic_system_patients",
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_audit_log"
+  ],
+  "success_criteria": {
+    "summary": "Compute duplicate pairs from snapshot owners (phone digits / email lower). For each pair: survivor = earlier created_at; assert duplicate deleted; survivor balance == sum of both (cents); all patients/invoices/communications repointed; one audit row per merge; all other rows byte-identical; owner count == 22 - len(pairs). NOTE: audit_log added to blast radius.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Compute duplicate pairs from snapshot owners (phone digits / email lower). For each pair: survivor = earlier created_at; assert duplicate deleted; survivor balance == sum of both (cents); all patients"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Entity resolution with normalization rules + multi-collection foreign-key repointing + balance conservation; the hardest CRUD skill set."
+  }
+}

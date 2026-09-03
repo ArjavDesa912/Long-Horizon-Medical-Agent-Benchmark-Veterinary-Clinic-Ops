@@ -1,0 +1,55 @@
+{
+  "task_id": "065_deceased_patient_archive",
+  "name": "veterinary_clinic_system_065_deceased_patient_archive",
+  "version": "1.0.0",
+  "difficulty": "medium",
+  "category": "workflow",
+  "surface": "backend",
+  "instruction": "Patient 17 (Rocket) has passed away. Archive properly: (1) set the patient's status to 'deceased' and add field archived='<batch_code>'; (2) cancel any of his 'reserved' boarding reservations (status 'cancelled', cancellation_reason 'patient_deceased'); (3) remove his 'waiting' waitlist entries (delete them); (4) cancel his future appointments (status 'scheduled' or 'confirmed' with appointment_date on/after the episode date -> status 'cancelled'). Completed and past records are history \u2014 never alter them.",
+  "app_slug": "veterinary_clinic_system",
+  "app_port": 5110,
+  "vibedb_port": 8080,
+  "collection_prefix": "veterinary_clinic_system_",
+  "verifier_email": "rl-admin@rl.local",
+  "verifier_password": "RLVerifier2025!",
+  "max_steps": 45,
+  "par_steps": 13,
+  "nonce": {
+    "collection": "veterinary_clinic_system_ops_meta",
+    "field": "batch_code"
+  },
+  "blast_radius": [
+    "veterinary_clinic_system_patients",
+    "veterinary_clinic_system_boarding_reservations",
+    "veterinary_clinic_system_waitlist",
+    "veterinary_clinic_system_appointments"
+  ],
+  "success_criteria": {
+    "summary": "Assert patient 17 deceased+tag; his reserved reservations cancelled w/ reason; his waiting waitlist rows GONE (count check); his future scheduled/confirmed appointments cancelled; every other row across the four collections byte-identical to snapshot.",
+    "checks": [
+      {
+        "type": "canary_hash",
+        "collections": "all seeded collections outside blast_radius"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "(see verifier.py)",
+        "expect": "Assert patient 17 deceased+tag; his reserved reservations cancelled w/ reason; his waiting waitlist rows GONE (count check); his future scheduled/confirmed appointments cancelled; every other row acro"
+      }
+    ]
+  },
+  "uniqueness_report": {
+    "domain_searches": [
+      {
+        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "top_results": [
+          "Boarding Requirements and Instructions - Kingdale Kennels",
+          "Required Vaccines - Five Points Kennels",
+          "Vaccination Requirements - Kennelwood Pet Resorts"
+        ]
+      }
+    ],
+    "uniqueness_searches": [],
+    "differentiation_note": "Cross-collection cascaded archival where each target collection has a different correct action (update vs cancel vs delete)."
+  }
+}
