@@ -1,52 +1,76 @@
 {
   "task_id": "022_ar_aging_report",
   "name": "veterinary_clinic_system_022_ar_aging_report",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation"],
   "surface": "websearch",
-  "instruction": "Build the standard accounts-receivable aging summary (the 0\u201330 / 31\u201360 / 61\u201390 / 90+ day buckets every practice manager runs \u2014 verify the bucket convention online if needed). Consider only invoices with status 'sent' or 'overdue' and unpaid balance (total_amount - amount_paid > 0); age is measured from issued_date to the episode date. Create one ops_reports row: {report: 'ar_aging', batch_code, bucket_0_30: <total unpaid aged 0..30 days, dollars>, bucket_31_60, bucket_61_90, bucket_90_plus, invoice_count: <invoices considered>}. Money fields are numbers in dollars.",
+  "instruction": "Build the month-end accounts-receivable aging and owner-balance reconciliation pack (verify the standard 0-30 / 31-60 / 61-90 / 90+ day aging buckets if needed). Do not modify any source collection. (1) In veterinary_clinic_system_billing_invoices, consider only invoices with status 'sent' or 'overdue' and unpaid balance (total_amount - amount_paid) > 0. Age each such invoice in whole days from dp(issued_date) to the episode date; bucket the unpaid balance into the four AR aging buckets. (2) Push one ops_reports row: report='ar_aging', batch_code, bucket_0_30, bucket_31_60, bucket_61_90, bucket_90_plus (all dollars, rounded to 2 decimals), invoice_count. (3) Push one ops_reports row per location (3 total): report='ar_aging_by_location', batch_code, location_id, location_name, the same four bucket fields, invoice_count, open_total. Include all three locations, even if zero. (4) For every owner, compute ledger_open_ar = sum of unpaid 'sent'/'overdue' invoices for that owner. Compare to owners.balance. Push one ops_reports row: report='ar_reconciliation_summary', batch_code, total_owners_checked (int), discrepancies_found (int), total_open_ar (dollars), total_owner_balance (dollars, sum of all owner balances). Do not change any owner balance. (5) Append one audit_log row: action='AR_AGING_CLOSE', actor='system', actor_role='system', target_collection='ops_reports', target_id=<batch_code>, details summarizing the open invoice count, total open AR, and discrepancy count, occurred_at the episode timestamp. The pack must be idempotent: a re-run must overwrite the same batch's ops_reports rows and not create duplicate audit rows.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Recompute from live invoices: unpaid sent/overdue; age=(ep-dp(issued_date)).days; bucket sums in cents -> dollars; assert exact cents equality per bucket and invoice_count; single row; batch_code==nonce.",
+    "summary": "No source collections modified (canary-checked). Recompute from live billing_invoices and owners: ar_aging row with correct bucket totals and invoice_count; exactly 3 ar_aging_by_location rows (one per location) with correct bucket/invoice/open totals; ar_reconciliation_summary with total_owners_checked=220, discrepancies_found, total_open_ar, and total_owner_balance. One AR_AGING_CLOSE audit row per batch. Every aggregate (bucket totals, per-owner open AR, total open AR, owner balance totals) computed two ways (raw-row Python and SQL aggregate) and agrees. Draft and paid invoices are excluded from open AR.",
     "checks": [
       {
         "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
+        "collections": "all seeded collections outside the declared blast_radius"
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live invoices: unpaid sent/overdue; age=(ep-dp(issued_date)).days; bucket sums in cents -> dollars; assert exact cents equality per bucket and invoice_count; single row; batch_code==non"
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly 1 ar_aging row, 3 ar_aging_by_location rows, and 1 ar_reconciliation_summary row for this batch with all fields matching the re-derived aggregates."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "AR bucket totals, invoice count, per-location open totals, and per-owner open AR all agree between a raw-row Python filter and an independent SQL aggregate query."
       }
     ]
   },
+  "hazards": [
+    "Tiny open AR in a 260-row ledger: only ids 1 (INV-1001, issued 2026-07-31, unpaid $523) and 2 (INV-1002, issued 2026-08-30, unpaid $214) are 'sent' and have unpaid balances. A solution that ages paid or draft invoices produces wrong totals.",
+    "Draft decoy: id 3 (INV-1003, status 'draft', issued 2026-09-02, unpaid $546) has a positive unpaid balance but is explicitly excluded because AR aging uses only 'sent' or 'overdue'.",
+    "Jitter-sensitive bucket boundaries: at 2026-09-30, invoice 1 (age 61 days) lands in 61-90 and invoice 2 (age 31 days) lands in 31-60; at 2026-09-27, invoice 1 is 58 days (31-60) and invoice 2 is 28 days (0-30); at 2026-10-03, invoice 1 is 64 days (61-90) and invoice 2 is 34 days (31-60). Hardcoded buckets fail.",
+    "Owner balance / ledger drift: the seed snapshot has 220 owners; 58 of them have an owner.balance that does not equal their open AR from 'sent'/'overdue' invoices. The breakdown is 55 owners with positive balance and zero open AR, 1 owner (id 1) with a smaller positive balance than their open AR, 1 owner (id 2) with zero balance but open AR, and 1 owner (id 21) with a negative balance. The task must report, not fix, these discrepancies.",
+    "Per-episode nonce and batch code: every report and audit row must carry the live batch_code from ops_meta; stale hardcoded batch codes fail."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "query": "accounts receivable aging report buckets 0-30 31-60 61-90 90 days veterinary practice",
         "top_results": [
-          "Account for receivables with a written policy - dvm360",
           "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
+          "Account for receivables with a written policy - dvm360",
           "Effective credit & collection techniques - dvm360"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Domain bucket convention (boundary 30/60/90) + partial-payment netting (total minus paid); agents usually age from due_date instead of issued_date."
+    "uniqueness_searches": [
+      {
+        "query": "AR aging report plus owner balance reconciliation veterinary practice dashboard benchmark",
+        "top_results": [
+          "Veterinary Practice AR Aging and Collections Dashboard",
+          "Accounts Receivable Reconciliation by Owner in Vet Software",
+          "Veterinary Billing: Aging + Balance Discrepancy Report"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses the classic AR aging report with an owner-balance reconciliation that deliberately does not modify owners, requiring the agent to read 6+ collections and verify every aggregate via dual SQL/API paths. The tiny open-AR set in a 260-row ledger and the large owner-balance drift are real red herrings from the 10x seed."
   }
 }

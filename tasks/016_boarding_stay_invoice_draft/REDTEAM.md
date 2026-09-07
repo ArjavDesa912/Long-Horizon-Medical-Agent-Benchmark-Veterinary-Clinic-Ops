@@ -1,17 +1,20 @@
 # 016_boarding_stay_invoice_draft — REDTEAM notes
 
 ## Mission
-Check out every guest whose stay ends on or before the episode date and bill the stay — this is what the front desk does at pick-up. For each checked_in reservation with check_out <= episode date: (1) set the reservation status to 'checked_out'; (2) create a draft invoice for the owner with invoice_number 'INV-B<batch_code>-<reservation_id>' (batch code from ops_meta), owner_id and patient_id from the reservation, location_id from the reservation, issued_date and due_date both on the episode date (due = issued + 21 days, standard net-21 — verify the convention if unsure), line_items=[{description: 'Boarding (<N> nights - <run_type>)', quantity: <N>, unit_price: <BOARD-NIGHT price from that location's fee schedule>}], total_amount=<N*price>, amount_paid=0, status='draft'. N = nights = days between check_in and check_out. Do not free the runs (housekeeping handles that separately) and do not touch paid invoices.
+Close out and draft invoices for all checked-in boarding stays whose check_out is on or before the episode date. For each stay: flip the reservation to 'checked_out', free the run, create a draft invoice with a batch-embedded invoice number and a BOARD-NIGHT line item, push a closeout audit_log entry, and summarize everything in a 'boarding_closeout' ops_reports row.
 
 ## Why this is hard / unique
-Multi-hop pricing (fee schedule join), night-count date arithmetic, net-21 due-date convention from domain knowledge, nonce-embedded numbering.
+- Multi-hop derivation: nights come from reservation dates, unit_price from the location's fee_schedule, owner from the patient, and the run_type from the boarding_runs record.
+- Net-21 due date is domain knowledge the agent must apply, not read directly.
+- Revenue and run-status aggregates are verified two independent ways (Python path vs SQL SUM/GROUP BY).
+- The blast radius includes 5 collections, but the mission reads from 9+.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- Only reservations 1-5 are checked_in at default ep; all other reservations (113 checked_out, 22 reserved) must not be billed or checked out.
+- Reservations 3 and 4 share runs with future reserved bookings (99 and 98), so a solution that flips every reservation on an occupied run over-bills.
+- Pre-existing invoices (260) include 67 with boarding line items; a solution that looks for any invoice with 'Boarding' in the description will confuse itself.
+- BOARD-NIGHT price is 38 at every location in the snapshot, but the correct path reads it from the fee_schedule, not hardcodes.
+- The due date at default ep 2026-09-30 is 2026-10-21 (ep + 21 days).
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

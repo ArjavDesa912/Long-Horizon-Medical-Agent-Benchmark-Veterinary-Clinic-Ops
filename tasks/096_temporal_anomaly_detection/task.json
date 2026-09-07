@@ -1,46 +1,65 @@
 {
   "task_id": "096_temporal_anomaly_detection",
   "name": "veterinary_clinic_system_096_temporal_anomaly_detection",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "repair",
+  "category": ["aggregation", "reconciliation"],
   "surface": "backend",
-  "instruction": "READ-ONLY anomaly hunt \u2014 mutate nothing. Find temporal impossibilities across the dataset: (a) vaccinations with due_date before administered_date; (b) boarding_reservations with check_out before check_in; (c) billing_invoices with due_date before issued_date; (d) billing_estimates with expires_date before created_date; (e) visit_records with locked_at before visit_date; (f) appointments whose end_time is not after start_time. Report one ops_reports row {report: 'temporal_anomalies', batch_code, anomalies: <total>, by_rule: <JSON object rule name ('vaccination_due_before_admin','stay_backwards','invoice_due_before_issued','estimate_backwards','lock_before_visit','appointment_time_inversion') -> count>, row_refs: <comma-joined ascending '<collection_short>:<id>' list of every offending row, or ''>}.",
+  "instruction": "Temporal data quality sweep — mutate nothing. Find all temporal impossibilities and near-impossibilities across the seed data and produce one ops_reports row {report: 'temporal_anomalies', batch_code, anomalies: <total>, by_rule: {<rule_name>: <count>}, row_refs: {<rule_name>: [<ascending ids>]}, clean: <true iff total == 0>}. The sweep must include these rules (derive from the data and clinical record-keeping norms; include zero-count rules; do not modify any collection): (a) appointment time inversion: an appointment's end_time is not strictly after its start_time; (b) vaccine due before administration: a vaccination's due_date is strictly before its administered_date; (c) visit record locked too early: a visit record's locked_at exists and is fewer than 30 days after its visit_date; (d) lab result before visit: a lab_result's resulted_at is strictly before the latest visit_records.visit_date for the same patient; (e) reminder queued after due: a reminder_queue row with a due_date has due_date strictly before queued_at; (f) estimate expires before created: a billing_estimates expires_date is strictly before its created_at. Row refs must be sorted within each rule and empty for clean rules.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 50,
-  "par_steps": 14,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
-  "blast_radius": [],
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
   "success_criteria": {
-    "summary": "Canary all seeded collections. Recompute six rule counts from live data (time compare for f: end<=start); assert exact totals/dict/CSV; nonce.",
+    "summary": "Canary every collection except ops_reports. Recompute the six rule counts and row-id lists two independent ways (Python over fetch_all and SQL SELECT/COUNT). Assert the ops_reports row matches exactly, including empty lists for clean rules.",
     "checks": [
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Canary all seeded collections. Recompute six rule counts from live data (time compare for f: end<=start); assert exact totals/dict/CSV; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "dual_path", "collection": "(see verifier.py)", "expect": "each rule count/row set is computed via both Python and SQL" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "exactly one temporal_anomalies row with matching by_rule/row_refs/anomalies/clean" }
     ]
   },
+  "hazards": [
+    "appointment time inversion: 274 appointments have end_time <= start_time (e.g., id 7 start_time 12:30, end_time 12:00; id 9 start 15:30, end 15:00). The seed reverses start/end for exactly half the appointment rows.",
+    "vaccine due before administration: 10 vaccinations have due_date < administered_date (e.g., id 100 FVRCP patient 50 administered 2026-08-19, due 2026-07-23; id 134 bordetella patient 67 administered 2026-07-15, due 2026-06-27).",
+    "visit record locked too early: 344 visit_records have a locked_at fewer than 30 days after visit_date (e.g., id 1 visit_date 2026-01-05, locked_at 2026-01-06).",
+    "lab result before latest visit: 11 lab_results have resulted_at before the patient's latest visit_date (ids 8,12,13,14,23,25,26,28,32,38,39).",
+    "reminder due before queued: exactly reminder_queue id 1 has due_date 2026-08-14 and queued_at 2026-09-03. Reminder id 2 (due 2026-09-10) and id 4 (no due_date) are not violations.",
+    "estimate expires before created: 0 rows, because every billing_estimates.expires_date is after its created_at. This is a zero-count rule that a lazy solution must still include as an empty row_ref list."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary appointment end time before start time error ezyVet",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "ezyVet shows a cannot be before/equal the start error when you save an appointment (docs.ezyvet.com)",
+          "Anomaly Detection in Domestic Animals using Real-Time Veterinary Data (lancaster.ac.uk)",
+          "Retrospective time series analysis of veterinary laboratory data (sciencedirect.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Six heterogeneous temporal predicates including a same-day time-string comparison; agents typically miss the lock-vs-visit and time-inversion rules."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary clinic temporal anomaly detection benchmark RL environment multi-collection",
+        "top_results": [
+          "World Feedback for Clinical Agents: Diagnosing RL in FHIR Environments (arxiv.org)",
+          "Perfect Pet - generate and pollute relational veterinary clinic databases (github.com)",
+          "vet-salud-database - data integrity and validation tests (github.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "A multi-collection temporal-impossibility sweep with cross-collection rules (lab vs visit, reminder due vs queued, visit lock vs 30-day rule) and dual-path verification. The large but real counts (274 time inversions, 344 early locks) make brute-force inspection infeasible and force programmatic filtering."
   }
 }

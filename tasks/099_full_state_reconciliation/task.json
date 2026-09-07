@@ -1,19 +1,21 @@
 {
   "task_id": "099_full_state_reconciliation",
   "name": "veterinary_clinic_system_099_full_state_reconciliation",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "aggregation",
+  "category": ["reconciliation", "aggregation", "workflow"],
   "surface": "backend",
-  "instruction": "Prove the boarding books balance three ways, in one row. Create one ops_reports row {report: 'boarding_recon', batch_code, occupied_runs: <runs status 'occupied'>, checked_in_reservations: <reservations status 'checked_in'>, runs_with_occupant_field: <runs with non-null current_patient_id>, consistent: <true iff occupied_runs == checked_in_reservations AND every occupied run's current_patient_id equals its checked_in reservation's patient>, mismatch_run_ids: <comma-joined ascending ids of runs failing the equality, or ''>}.",
+  "instruction": "Run the full boarding-ward state reconciliation for the episode date. The kennel occupancy board, the checked-in reservations, the daily care log, and the patient records must all tell the same story for today's boarders. Produce a single `ops_reports` row `report='full_state_recon'` with the batch code and these derived fields: `occupied_runs` (runs whose status is occupied), `checked_in_reservations` (reservations whose status is checked_in), `runs_with_occupant_field` (runs with a non-null current_patient_id), `consistent` (true only if the three counts are equal and every occupied run's patient matches its checked-in reservation's patient in both directions), `mismatch_run_ids` (ascending, comma-joined ids of runs failing that bidirectional match, or empty string), `checked_in_with_log` (checked-in reservations that already have a daily log row for the episode date), `missing_log_reservation_ids` (ascending ids of checked-in reservations with no log for today), `location_mismatch_patient_ids` (ascending ids of checked-in patients whose location does not match their reservation and run), and `active_mismatch_patient_ids` (ascending ids of checked-in patients whose status is not active). Do not modify any existing rows; the report is the only write.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 60,
-  "par_steps": 15,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,31 +24,41 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live runs + reservations; assert exact ints/bool/CSV; nonce.",
+    "summary": "One ops_reports row (report=full_state_recon, batch_code) containing the three occupancy counts, a true/false consistency flag, mismatch ids, log coverage counts, and patient/run location and active mismatches. All values must be derivable from live boarding_runs, boarding_reservations, boarding_daily_log, patients, and locations and must agree when computed via raw-row API filter and independent SQL COUNT queries. Every collection outside ops_reports is byte-identical.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live runs + reservations; assert exact ints/bool/CSV; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "exactly one full_state_recon row with all counts, consistency, and mismatch lists derived from live data" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_boarding_runs, boarding_reservations, boarding_daily_log, patients", "expect": "every aggregate count agrees between raw-row filter and SQL COUNT" }
     ]
   },
+  "hazards": [
+    "Scope decoy: only boarding_reservations id=1-5 have `status='checked_in'`. Reservations id=6-140 are `reserved` (22 rows) or `checked_out` (113 rows). A solution that misclassifies other reservations or mutates runs/reservations fails the canary.",
+    "Field-vs-status divergence: boarding_runs id=1-5 are `occupied` with `current_patient_id` 2,4,6,8,10; id=6-17 are `available` with `current_patient_id` null. Counting only one of `status` or `current_patient_id` produces a wrong run count.",
+    "Location mismatch: checked-in reservation id=5 and run id=5 have `location_id='1'`, but patient id=10 has `location_id='2'`. This must be reported in `location_mismatch_patient_ids` even though the run/reservation link is correct.",
+    "Decoy patient: patient id=27 has `status='transferred'` and is not boarding. A solution that flags any non-active patient rather than checking the checked-in boarders will either over-report active_mismatch or mutate the patient list.",
+    "Daily log boundary: boarding_daily_log rows 1-10 cover reservations 1-5 with `log_date` 2026-09-03 and 2026-09-04. On those episode dates the existing log counts as a valid log and must not be duplicated; on other episode dates the missing log must be reported. Existing non-episode logs must remain untouched."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "kennel boarding reconciliation occupancy board daily log patient location mismatch",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Drop-Off Promises vs the Live Timeline: Closing the Gap Between Front Desk and Kennel on Day One (petops.app)",
+          "Medication and Special-Care Boarding: Why Daily Updates Fail If Clinical Detail Stays at the Front Desk (petops.app)",
+          "Float Staff and Fill-Ins: Stopping Boarding Notes From Turning Into a Telephone Game (petops.app)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Three-way consistency proof with a mismatch listing; agents assert counts and skip the per-run occupant equality."
+    "uniqueness_searches": [
+      {
+        "query": "reinforcement learning benchmark boarding ward four-way reconciliation run reservation log patient location",
+        "top_results": [
+          "No public RL benchmark combines a boarding occupancy board, checked-in reservations, daily care logs, and patient master records into a single four-way consistency report.",
+          "Existing kennel-management tasks usually verify occupancy counts only; none require patient/run/reservation location cross-checks and active-status cross-checks.",
+          "The bidirectional mismatch list plus log-coverage and patient-location mismatch fields make the end-state structurally different from a simple count check."
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 expands the original three-way boarding count proof into a full four-way reconciliation: run/reservation bidirectional match, episode-date daily-log coverage, and patient location/active-status cross-checks. All counts are verified through dual SQL/API paths, and the only allowed mutation is the single summary report."
   }
 }

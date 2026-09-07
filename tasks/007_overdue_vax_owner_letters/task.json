@@ -1,61 +1,63 @@
 {
   "task_id": "007_overdue_vax_owner_letters",
-  "name": "veterinary_clinic_system_007_overdue_vax_owner_letters",
-  "version": "1.0.0",
+  "name": "veterinary_clinic_system_007_vaccination_program_audit",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "workflow",
+  "category": ["workflow", "aggregation", "reconciliation"],
   "surface": "backend",
-  "instruction": "Monthly compliance sweep, batched under the episode batch code. (1) In reminder_queue, mark every currently-queued vaccination_due row as status='sent' with sent_on set to the episode date. (2) For every patient that still has at least one overdue vaccination as of the episode date (due_date strictly before the episode date) \u2014 whether or not it had a queued reminder \u2014 push one communications row to its owner: channel='email', direction='outbound', subject='Vaccination compliance notice <batch_code>' (batch code from ops_meta), body='<PatientName> has <K> overdue vaccination(s) as of <episode date YYYY-MM-DD>.', logged_by='system', occurred_at on the episode date. (3) Push one audit-style row into reminder_queue: kind='sweep', status='done', message='sweep <batch_code>: <R> reminders sent, <C> owner notices', where R is the number of rows flipped in step 1 and C the number of rows created in step 2. Seeded communications must remain untouched.",
+  "instruction": "Run the monthly vaccination program audit for the practice, batched under the episode batch code (ops_meta), as of the episode date. The reminder queue is not authoritative for who is overdue — some overdue patients never got a queued reminder, and the queue also holds unrelated reminder kinds you must leave untouched. This audit has three parts, all read from the same live vaccination records as of the episode date, so make sure each part is independently derived rather than copied from another. (1) Reminder sweep: mark every currently-queued vaccination_due reminder as status='sent' with sent_on set to the episode date. Separately, for every patient who has at least one overdue vaccination as of the episode date (due_date strictly before the episode date) — whether or not they had a queued reminder — push one outbound email communications row to their owner: subject='Vaccination compliance notice <batch_code>', body='<PatientName> has <K> overdue vaccination(s) as of <episode date YYYY-MM-DD>.', logged_by='system', occurred_at the episode date, patient_id set to that patient's id. An owner with more than one overdue pet gets one notice per pet (one row per patient_id), each with its own patient name and count — do not collapse them, and do not rely on the name/body text to tell two pets apart (some share a name). Close the sweep with one reminder_queue row: kind='sweep', status='done', message='sweep <batch_code>: <R> reminders sent, <C> owner notices' (R = reminders flipped this sweep, C = distinct overdue patients). (2) Compliance report: create ops_reports rows (report='vaccination_compliance', batch_code) — one per vaccine_type present in the data plus an 'ALL' rollup — each with {vaccine_type, total, overdue, compliance_pct: round(100*(total-overdue)/total, 1)}, all computed from live vaccinations against the episode date. No other vaccination_compliance rows may exist for this batch. (3) Inventory coverage: create ops_reports rows (report='vaccine_coverage', batch_code) — exactly one per vaccine type — {vaccine_type, item_name, due_next_30: count of vaccinations of that type due in [episode_date, episode_date+30], on_hand: total quantity_on_hand across pharmacy_inventory rows whose item_name starts with the mapped product prefix, coverage_gap: max(0, due_next_30 - on_hand)}. Mappings: rabies→'Rabies vaccine 1yr', DHPP→'DHPP vaccine', FVRCP→'FVRCP vaccine', bordetella→'Bordetella vaccine'. Seeded communications, and every collection this audit doesn't write to, must remain untouched.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 14,
+  "max_steps": 195,
+  "par_steps": 130,
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
     "veterinary_clinic_system_communications",
-    "veterinary_clinic_system_reminder_queue"
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "R = count of snapshot reminder_queue rows with kind=='vaccination_due' and status=='queued' (2). Assert those rows now status=='sent' and dp(sent_on)==ep; assert other seeded queue rows unchanged. C = distinct patients with any vaccination due<ep. Assert exactly C new communications rows with exact fields (subject carries live batch_code; body K == patient's overdue count; date == ep). Assert one new sweep row with message numbers matching R and C. Totals: communications 16+C, reminder_queue 4+1.",
+    "summary": "R = count of snapshot reminder_queue rows with kind=='vaccination_due' and status=='queued'; those rows must end status='sent' with dp(sent_on)==ep, all other seeded queue rows byte-identical. C = distinct patients with any vaccination due<ep (live data, not the queue). Exactly one new communications row per overdue patient, keyed by patient_id (not body text — same-named litter-mates of one owner can produce identical body text) so multi-pet owners each get their own row. Exactly one new sweep row with message counts matching R and C. ops_reports holds exactly len(vaccine_types)+1 vaccination_compliance rows and exactly 4 vaccine_coverage rows for this batch_code, each field recomputed two independent ways (raw-row filter and SQL GROUP BY/COUNT) which must agree with each other and with what was written. Everything outside the three write collections is canary-checked byte-identical.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "R = count of snapshot reminder_queue rows with kind=='vaccination_due' and status=='queued' (2). Assert those rows now status=='sent' and dp(sent_on)==ep; assert other seeded queue rows unchanged. C ="
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "(see verifier.py)", "expect": "see summary above" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_vaccinations", "expect": "every aggregate total/overdue/due_next_30 number agrees between a raw-row Python filter and an independent SQL GROUP BY/COUNT query" }
     ]
   },
+  "hazards": [
+    "reminder_queue seed row id=3 (kind='invoice_overdue', status='sent') and id=4 (kind='boarding_checkin', status='queued') look superficially similar to the target rows but must NOT be flipped or counted — an over-broad 'flip anything queued' or 'flip anything vaccination-related' solution touches these and fails the decoy-row canary check inside the sweep loop.",
+    "date-boundary precision: due_date comparisons must be strict '<' (overdue) vs inclusive '<=' / '>=' (due_next_30 window), and the episode date itself jitters ±3 days per episode (env.py) around a base anchor — at 10x vaccination volume (600 rows) there are real rows landing near this boundary every episode, so an off-by-one boundary produces a wrong but plausible-looking count rather than an obviously-broken one.",
+    "multi-pet owner collision: some owners now have 2+ overdue patients (a consequence of the 10x patient volume), and with a 50-name pet-name pool over 300 patients two litter-mates can share both a name and an overdue count, making their notice body text byte-identical. A solution that dedups or matches by (owner_id, body) instead of patient_id either drops one pet's notice or can't tell the two apart; patient_id is a required field on the row specifically to close this.",
+    "idempotency on rerun: the sweep's own reminder_queue rows are already 'sent' on a second run (so a naive re-derivation of R would compute 0, not the original count), and a naive re-run would either skip the compliance/coverage report rewrite (stale batch) or double-push duplicate communications/report rows — gold.py's R is re-derived from live post-flip state (not a run-local delta) and reports are deleted-then-rewritten per batch_code specifically so a second run reaches byte-identical state."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "AAHA vaccination guidelines rabies DHPP FVRCP bordetella overdue reminder recall veterinary practice 2026",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org)",
+          "Kitten Vaccination Schedule 2026: AAHA & AAFP Feline Guidelines (petcare-ai.com)",
+          "Dog & Cat Vaccine Schedules + 50 State Rabies Laws 2026 (pawcost.com)"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "monthly compliance sweep overdue vaccination owner notice letters veterinary clinic batch",
+        "query": "veterinary practice vaccination compliance audit combined report reminder sweep inventory coverage single mission benchmark task",
         "top_results": [
-          "Reminder/Recall | STChealth documentation",
-          "Patient Reminders | Vetspace Merlin manual"
+          "How to Use Veterinary Practice Reporting Every Week (digitail.com)",
+          "Veterinary Clinic Compliance Audit Checklist Template (paperform.co)",
+          "Veterinary Automation Playbook 2026 (ustechautomations.com)"
         ]
       }
     ],
-    "differentiation_note": "Three-phase batch with cross-collection count consistency (sweep row must agree with actual mutations) and nonce-stamped subjects \u2014 memorized counts fail on reseed."
+    "differentiation_note": "Fuses v1's 007 (reconciliation sweep) + 008 (compliance report) + 010 (inventory coverage) into one mission with a single combined end-state: three independently-derived outputs from the same live vaccination data, dual-path (API vs SQL) verification on every aggregate, patient_id-keyed notice matching to survive the multi-pet-owner name collisions that only emerge at 10x patient volume, and idempotent re-run semantics. No existing public benchmark task combines reconciliation + grouped compliance reporting + cross-collection inventory-coverage in one mission with this verification structure."
   }
 }

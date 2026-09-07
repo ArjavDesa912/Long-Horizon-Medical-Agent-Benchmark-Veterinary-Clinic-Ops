@@ -1,19 +1,21 @@
 {
   "task_id": "089_document_expiry_tracker",
   "name": "veterinary_clinic_system_089_document_expiry_tracker",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "aggregation",
-  "surface": "websearch",
-  "instruction": "Rabies certificates expire with the vaccination they certify. For every files row with doc_type 'rabies-certificate', find the patient's LATEST rabies vaccination due_date \u2014 the certificate's effective expiry (certificates follow the vaccine's validity, standard practice \u2014 verify if unsure). Create one ops_reports row {report: 'doc_expiry', batch_code, certificates: <count of rabies-certificate files>, expired: <how many have latest rabies due_date strictly before the episode date OR the patient has no rabies vaccination>, expiring_within_30d: <due_date in [episode date, episode date+30]>, patient_ids_expired: <comma-joined ascending patient ids of the expired set, or ''>}.",
+  "category": ["aggregation", "reconciliation", "workflow"],
+  "surface": "backend",
+  "instruction": "The file library stores clinical documents whose validity follows the most recent related clinical event; the system does not record an explicit expiry date. Run the document expiry audit as of the episode date. For each files row, derive an effective expiry date from its doc_type: a rabies-certificate is valid through the patient's latest rabies vaccination due_date (AAHA standard — verify if unsure); a boarding-consent is valid through the patient's latest boarding_reservations check_out; an anesthesia-consent is valid through the patient's latest visit_records visit_date; other doc_types (radiograph, clinical photo, referral-letter) have no expiry and are always valid. A document with expiry strictly before the episode date is 'expired'; one with expiry in [episode_date, episode_date + 30] is 'expiring_soon'; otherwise 'valid'. If a patient has no relevant event (e.g., no rabies vaccination for a rabies-certificate), treat the document as expired. Create one ops_reports row report='doc_expiry' with batch_code, certificates (total files), expired, expiring_within_30d, by_type (JSON doc_type -> {expired, expiring_soon, valid}), expired_patient_ids (comma-joined ascending patient ids of expired files, or ''), and details (array of {file_id, patient_id, doc_type, expiry_date, status}, sorted by file_id). Use live data only; do not hardcode counts or dates.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 13,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute via files\u2192patient\u2192vaccinations joins vs ep; exact ints and CSV; nonce.",
+    "summary": "One ops_reports row report='doc_expiry' with batch_code and exact counts, by_type, expired_patient_ids, and details. Every classification is derived from files joined with vaccinations, boarding_reservations, or visit_records as appropriate. Documents with no expiry (radiograph, clinical photo, referral-letter) are always valid. Dual-path Python/SQL verification on the aggregate counts.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +33,51 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Recompute via files\u2192patient\u2192vaccinations joins vs ep; exact ints and CSV; nonce."
+        "expect": "Exact doc_expiry ops_reports row with all detail rows and aggregate counts recomputed from live data."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_files",
+        "expect": "Expired count and expiring count are recomputed by independent SQL joins and raw-row filter and must agree."
       }
     ]
   },
+  "hazards": [
+    "files id=4 (doc_type='rabies-certificate', patient_id='1') must use patient 1's latest rabies due_date (2027-07-20T00:00:00+00:00 in the snapshot), which is well after episode+30, so status 'valid'.",
+    "files id=5 (doc_type='boarding-consent', patient_id='2') must use patient 2's latest boarding_reservations check_out (2026-09-09T00:00:00+00:00 in the snapshot), which is before the episode date, so status 'expired'.",
+    "files id=6 (doc_type='anesthesia-consent', patient_id='6') must use patient 6's latest visit_records visit_date (2025-09-28T00:00:00+00:00 in the snapshot), which is before the episode date, so status 'expired'.",
+    "files ids 1,2 (radiograph), 3,7 (clinical photo), and 8 (referral-letter) have no expiry and must be status 'valid' with expiry_date null, regardless of any unrelated vaccination dates for those patients.",
+    "A solution that applies a rabies-vaccination expiry rule to every file, or ignores doc_type, will misclassify the radiograph, clinical photo, referral-letter, boarding-consent, and anesthesia-consent rows."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "AAHA rabies vaccination certificate validity due date veterinary 2026",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org)",
+          "Rabies Vaccination and Certificate Rules - AVMA",
+          "Dog & Cat Vaccine Schedules + 50 State Rabies Laws 2026 (pawcost.com)"
+        ]
+      },
+      {
+        "query": "veterinary consent form validity period boarding anesthesia visit record",
+        "top_results": [
+          "Boarding Consent and Medical Records Retention - Vetstoria",
+          "Anesthesia Consent Validity in Veterinary Practice - DVM360",
+          "Veterinary Client Consent Forms: Expiration and Renewal"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Certificate-validity-follows-vaccine domain rule + three-way bucketing with an id listing."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary document expiry tracker rabies certificate boarding consent benchmark task",
+        "top_results": [
+          "Document Expiry Audit for Veterinary Practice",
+          "Rabies Certificate Expiry Tracker Benchmark",
+          "Veterinary File Expiry and Compliance Task"
+        ]
+      }
+    ],
+    "differentiation_note": "Requires domain knowledge (rabies certificate follows vaccine due date) and doc-type-specific joins to vaccinations, boarding_reservations, and visit_records. Includes an expiring_soon window and handles no-expiry doc types. Dual-path SQL vs raw-row verification on all aggregates."
   }
 }

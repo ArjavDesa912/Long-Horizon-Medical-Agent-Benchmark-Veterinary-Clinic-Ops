@@ -1,19 +1,21 @@
 {
   "task_id": "080_enterprise_kpi_pack",
   "name": "veterinary_clinic_system_080_enterprise_kpi_pack",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "aggregation",
-  "surface": "frontend",
-  "instruction": "The Monday leadership pack, all KPIs in one row. Create one ops_reports row {report: 'kpi_pack', batch_code, on_episode_date: '<YYYY-MM-DD>', appointments_today, boarding_occupancy_pct: <100*occupied/total runs, round 1>, vaccinations_overdue: <vaccinations with due_date strictly before episode date>, outstanding_balance_total: <sum over owners of balance, dollars>, open_invoices: <invoices status 'sent' or 'overdue'>, critical_labs_open: <lab_results flag 'critical'>}.",
+  "category": ["aggregation", "reconciliation", "workflow"],
+  "surface": "backend",
+  "instruction": "Generate the enterprise KPI pack for the leadership dashboard as of the episode date, batched under the episode batch code. All output goes into ops_reports with report='kpi_pack'. The pack has three independent parts, each derived from live data; do not copy numbers from any manifest or snapshot. (1) Enterprise-wide row (scope='enterprise'): appointments_today (all appointments with appointment_date == episode date), boarding_occupancy_pct (round 1 decimal = 100 * occupied_runs / total_runs), vaccination_overdue (vaccinations with due_date strictly before episode date), open_invoices (billing_invoices with status 'sent' or 'overdue'), outstanding_ar_balance (sum of total_amount - amount_paid for those open invoices), critical_labs_open (lab_results with flag 'critical'), outstanding_balance_total (sum of all owners' balance). (2) One location-level row per location in locations (scope='location', location_id): appointments_today at that location, boarding_occupancy_pct for runs at that location, active_patients (patients with status 'active' and that location_id, excluding transferred patients), open_invoices with that location_id, outstanding_ar_balance for that location's open invoices. (3) AR aging row (scope='ar_aging'): ar_0_30, ar_31_60, ar_61_90, ar_over_90, total_open_ar, open_invoice_count, where each open invoice's days overdue = max(0, episode_date - due_date) and unpaid = total_amount - amount_paid. The occupancy board (boarding_runs) must be reconciled with the reservation ledger (boarding_reservations status 'checked_in'); if they disagree, include a boarding_reconciliation_note, otherwise leave it null or empty.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 50,
-  "par_steps": 15,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session; placeholder for hardmode v2",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session; placeholder for hardmode v2",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute all six KPIs from live data vs ep; exact values (pct within 0.05, money cents); nonce.",
+    "summary": "Exactly 5 ops_reports rows for this batch_code (1 enterprise + 1 per location + 1 ar_aging). All numeric KPIs are recomputed two independent ways (Python row filter vs SQL aggregate) and must agree with the rows. The location rows must correspond to the 3 seeded locations. Open invoice and AR definitions exclude the draft decoy. Active patients exclude the transferred decoy. Boarding occupancy is run-based and reconciled with reservations. All other collections unchanged.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +32,44 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute all six KPIs from live data vs ep; exact values (pct within 0.05, money cents); nonce."
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "5 rows with report='kpi_pack' and batch_code, correct enterprise/location/ar_aging fields recomputed two ways"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_appointments, veterinary_clinic_system_boarding_runs, veterinary_clinic_system_vaccinations, veterinary_clinic_system_billing_invoices, veterinary_clinic_system_lab_results, veterinary_clinic_system_owners",
+        "expect": "every aggregate total/overdue/balance/pct is verified by an independent SQL query and agrees with the API-filtered Python computation"
       }
     ]
   },
+  "hazards": [
+    "billing_invoices id 3 has status='draft' and amount_paid=0 (seed_snapshot.json row: invoice_number 'INV-1003', status 'draft', total_amount 546, due_date '2026-09-23'). A naive 'unpaid = amount_paid < total_amount' rule includes it and overstates open_invoices and outstanding_ar_balance; the spec restricts open invoices to status 'sent' or 'overdue'.",
+    "patients id 27 has status='transferred' and location_id='1' (seed_snapshot.json). It must not be counted in active_patients for any location; an unfiltered COUNT of patients by location_id inflates the loc1 active_patient count by 1.",
+    "boarding_reservations contains 140 rows but only ids 1-5 have status='checked_in' (seed_snapshot.json status distribution: checked_out 113, reserved 22, checked_in 5). boarding_runs ids 1-5 are 'occupied' and correspond to those 5 checked-in reservations. Counting all reservations, or all runs not 'available', yields a wrong occupancy number; the correct occupancy is occupied runs / total runs.",
+    "open invoices in billing_invoices are only id 1 (status 'sent', location_id 1, total 523) and id 2 (status 'sent', location_id 2, total 214). No other 'sent' or 'overdue' invoices exist in the seed snapshot, so the AR aging total is 737 and the per-location open invoice counts are 1/1/0.",
+    "The episode date jitters +/-3 days around month-end (env.py _inject_nonce), so the exact counts for appointments_today, vaccination_overdue, and AR buckets change per episode. Any hardcoded number or off-by-one date comparison (e.g., using <= instead of < for overdue) produces a wrong but plausible-looking report."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice KPI dashboard occupancy AR aging vaccination overdue 2026",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "AAHA/AVMA Practice Life: KPIs every veterinary practice should track",
+          "Veterinary Practice Dashboards: appointment, boarding, and financial metrics (vetstoria.com)",
+          "AVMA Trends: Key financial and operational KPIs for veterinary practices"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Six-source KPI fan-in matching the dashboard's KPI row definitions; each KPI has its own subtlety (strict-before, status set, float sum)."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary clinic multi-location KPI pack AR aging boarding occupancy reconciliation benchmark task",
+        "top_results": [
+          "Benchmarking KPIs for multi-location veterinary groups (dvm360)",
+          "Operational dashboards in veterinary practice management software",
+          "Veterinary practice AR aging and open invoice report automation"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses enterprise-level KPI aggregation, per-location breakdown, AR aging, and a cross-collection boarding reconciliation (runs vs reservations) into one multi-output report. Every numeric value is verified by two independent computations (Python filter and SQL aggregate), and the task includes decoy rows (draft invoice, transferred patient, non-checked-in reservations) that an over-broad aggregation would mishandle."
   }
 }

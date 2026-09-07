@@ -1,60 +1,68 @@
 {
   "task_id": "002_rabies_booster_due_recompute",
   "name": "veterinary_clinic_system_002_rabies_booster_due_recompute",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "update",
-  "surface": "websearch",
-  "instruction": "A data-import glitch wiped the due dates on all rabies vaccinations for canine patients. Recompute and set the due_date for every rabies vaccination belonging to a canine patient as exactly 1 year after its administered_date (per the AAHA canine vaccination guideline that a rabies booster follows the initial dose by 1 year \u2014 look this up if unsure). Leave feline/other-species rabies rows and every other field untouched. Write dates as ISO timestamps at midnight UTC (YYYY-MM-DDT00:00:00.000Z).",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["update", "aggregation", "workflow"],
+  "surface": "backend",
+  "instruction": "A data-import glitch corrupted the due_date on every canine rabies vaccination. Recompute each one from the AAHA canine rabies booster interval (search if you are unsure of the species-specific rule), then run the full batch audit under the episode batch code in ops_meta. (1) Set the due_date of every rabies vaccination whose patient is canine to exactly one year after its administered_date, guarding Feb 29 edge cases. Write recomputed due dates as ISO timestamps at midnight UTC (YYYY-MM-DDT00:00:00.000Z). (2) For each affected patient whose new due_date is in the past or within the next 30 days from the episode date, push one reminder_queue row (kind='vaccination_due', status='queued', queued_by='admin@pawsclinic.com', due_date equal to the new due, message '<PatientName> rabies booster due <YYYY-MM-DD> — call to book a nurse visit.') and one outbound email communications row to the owner with patient_id set (subject='Rabies booster recompute <batch_code>', body='<PatientName>'s rabies booster is now due by <YYYY-MM-DD> as of <episode date YYYY-MM-DD>.', logged_by='system', occurred_at=episode). (3) Push exactly two ops_reports rows for this batch: one with report='rabies_recompute_audit' giving total_canine_rabies, recomputed_overdue, recomputed_due_next_30, and recomputed_current; and one with report='rabies_inventory_coverage' giving vaccine_type='rabies', item_name='Rabies vaccine 1yr', due_next_30, on_hand, and coverage_gap. (4) Append one audit_log entry with action='RABIES_RECOMPUTE_BATCH', actor='system', actor_role='system', target_collection='vaccinations', target_id=<batch_code>, details summarizing the counts, and occurred_at=episode. Leave every non-target vaccination, all seeded reminder/communications/audit rows, and every other collection untouched. The solution must be idempotent and re-derivable from live data.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session (anti-brute-force); this session cannot run against a container",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session; placeholder only",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_vaccinations"
+    "veterinary_clinic_system_vaccinations",
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Fetch vaccinations + patients. For each vaccination with vaccine_type=='rabies' whose patient species=='canine': expected due = dp(administered_date)+1yr (same month/day; use dateutil-free arithmetic via datetime with year+1, guarding Feb 29 -> Feb 28). Assert dp(due_date)==expected. Assert all other vaccination rows byte-identical to snapshot (strip nothing \u2014 these rows must be unmodified; compare via canon of non-target rows vs snapshot non-target rows). Assert count 60.",
+    "summary": "Recompute every canine rabies due_date as dp(administered_date)+1yr (Feb 29 -> Feb 28). Verify each target row's new due_date two ways (Python datetime and SQL date arithmetic) and confirm all non-target vaccination rows are byte-identical to the snapshot. For each affected patient with new due <= ep+30d, one new reminder_queue row and one new communications row keyed by patient_id. Exactly two ops_reports rows (rabies_recompute_audit with correct counts, rabies_inventory_coverage with on_hand from pharmacy_inventory and coverage_gap) and exactly one new audit_log row for this batch. All seeded rows in touched collections unchanged. All other collections canary-intact.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Fetch vaccinations + patients. For each vaccination with vaccine_type=='rabies' whose patient species=='canine': expected due = dp(administered_date)+1yr (same month/day; use dateutil-free arithmetic "
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside the declared blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_vaccinations", "expect": "target rows (canine + rabies) updated to administered_date + 1 year; all other rows unchanged" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_vaccinations", "expect": "recomputed totals/overdue/due_next_30/current counts and affected-patient set agree between a raw-row Python filter and an independent SQL GROUP BY/COUNT query" }
     ]
   },
+  "hazards": [
+    "non-canine rabies rows are decoys: 45 feline + 7 avian + 9 exotic + 7 equine rabies rows exist in the 600-row vaccination table (e.g., row id 9 for patient 5/Clementine, feline). A solution that filters only on vaccine_type='rabies' mutates these and fails the canary.",
+    "non-rabies rows are decoys: the 450 DHPP/FVRCP/bordetella rows for canine patients (e.g., row id 2 for patient 1/Biscuit, DHPP) must not be touched.",
+    "seeded reminder_queue rows id 3 (invoice_overdue, status='sent') and id 4 (boarding_checkin, status='queued') are decoys that must survive byte-identical; only new rows may be added.",
+    "date-boundary precision: overdue means new due_date < episode_date; due_next_30 means episode_date <= new due_date <= episode_date + 30 days. With the episode date jittering ±3 days, the exact count of rows falling in each bucket changes every episode, so hardcoded counts fail.",
+    "multi-pet owner collision: the same owner can have multiple canine patients. Reminder and communications rows must be keyed by patient_id, not owner_id or body text, so one notice per affected pet is created even when names and due dates collide."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "AAHA canine vaccination guidelines rabies booster 1 year after initial dose 2022",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "Key Vaccination: Rabies - AAHA (aaha.org)",
+          "2022 AAHA Core and Noncore Vaccines for Dogs (aaha.org PDF)",
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "recompute rabies booster due date 1 year after administered veterinary data task",
+        "query": "veterinary practice rabies booster due date recompute batch audit owner notification inventory coverage benchmark task",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Manually change the due date of a care service | ezyVet Knowledge Center"
+          "How to Automate Veterinary Vaccination Reminders in 2026 (ustechautomations.com)",
+          "Pet Vaccination Schedule and Reminder System | RationalGo App Builder",
+          "Pet Vaccination Booster Reminder Automator for Vet Clinics | RationalGo"
         ]
       }
     ],
-    "differentiation_note": "Requires external guideline knowledge (AAHA 1-year rabies booster) combined with a species join; date-arithmetic edge cases (leap day) make naive hardcoding brittle."
+    "differentiation_note": "Fuses a species-specific recompute (canine rabies 1-year interval) with a multi-collection batch audit (ops_reports + audit_log + reminder_queue + communications + inventory coverage). Requires joining 6+ collections, dual-path aggregate verification, and idempotent writes. No public benchmark combines a data-fix recompute with a controlled batch audit and owner notification in one mission."
   }
 }

@@ -1,19 +1,21 @@
 {
   "task_id": "024_estimate_to_invoice_conversion",
   "name": "veterinary_clinic_system_024_estimate_to_invoice_conversion",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "workflow",
-  "surface": "frontend",
-  "instruction": "Do what the Billing \u2192 Estimates screen's 'Convert to invoice' action does for every estimate with status 'accepted': create a new invoice with invoice_number 'INV-C<batch_code>-<estimate_number digits>' (e.g. EST-3005 -> digits 3005), owner/patient/location copied from the estimate, issued_date = episode date, due_date = episode date + 21 days, line_items copied from the estimate, total_amount = estimate total, amount_paid = 0, status 'sent'; then set the estimate's status to 'converted'; then append one audit_log row per conversion {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'ESTIMATE_CONVERTED', target_collection: 'billing_estimates', target_id: <estimate id as string>, details: 'Converted to invoice INV-C<batch_code>-<digits>', occurred_at: episode timestamp}. Estimates with any other status stay untouched.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["create", "workflow", "aggregation"],
+  "surface": "backend",
+  "instruction": "Do what the Billing → Estimates screen's 'Convert to invoice' action does for every estimate with status 'accepted'. (1) For each accepted estimate, create one new invoice in veterinary_clinic_system_billing_invoices with invoice_number 'INV-C<batch_code>-<estimate_number digits>' (e.g. EST-3005 -> digits 3005), owner/patient/location copied from the estimate, issued_date = episode date (ISO timestamp at 00:00:00.000Z), due_date = episode date + 21 days (ISO timestamp at 00:00:00.000Z), line_items copied from the estimate, total_amount = estimate total, amount_paid = 0, status 'sent'. (2) Set the estimate's status to 'converted'. (3) Append one audit_log row per conversion: actor='Dana Whitaker', actor_role='org_admin', action='ESTIMATE_CONVERTED', target_collection='billing_estimates', target_id=<estimate id as string>, details='Converted to invoice INV-C<batch_code>-<digits>', occurred_at the episode timestamp. (4) Push one outbound email communications row to the estimate's owner: channel='email', direction='outbound', subject='Estimate converted <batch_code>', body='<OwnerFullName>, your estimate <estimate_number> for <PatientName> has been converted to invoice <invoice_number>. Balance $<total with 2 decimals>. Payment due <due_date as YYYY-MM-DD>.', logged_by='system', occurred_at the episode timestamp, owner_id and patient_id set. (5) Push one ops_reports row: report='estimate_conversion_summary', batch_code, estimate_count, total_converted (dollars), owners_affected, location_breakdown (dict keyed by location_id with {estimate_count, converted_total}). Estimates with any other status stay untouched. The workflow must be idempotent: a re-run must not create duplicate invoices, duplicate communications, or duplicate audits for the same batch, and must overwrite the ops_report.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 12,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -21,34 +23,60 @@
   "blast_radius": [
     "veterinary_clinic_system_billing_estimates",
     "veterinary_clinic_system_billing_invoices",
-    "veterinary_clinic_system_audit_log"
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Accepted estimates from snapshot (2). For each: new invoice with exact fields (nonce-embedded number, cents totals), estimate status 'converted', one matching audit row with exact action/details. Assert counts: invoices 26+2, estimates 10, audit_log 4+2; all other rows unchanged.",
+    "summary": "Accepted estimates from the snapshot (currently 20 at 10x seed). For each: a new invoice with the nonce-embedded number and exact fields (cents totals, copied line_items), the estimate re-tagged 'converted', one matching audit row, and one matching outbound communication. One ops_reports summary with correct counts, total, owner count, and per-location breakdown. Non-accepted estimates and collections outside the blast radius byte-identical. Counts, total converted, and per-location totals computed two ways (Python and SQL) and must agree.",
     "checks": [
       {
         "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
+        "collections": "all seeded collections outside the declared blast_radius"
       },
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Accepted estimates from snapshot (2). For each: new invoice with exact fields (nonce-embedded number, cents totals), estimate status 'converted', one matching audit row with exact action/details. Asse"
+        "expect": "20 new invoices from accepted estimates; estimates re-tagged; audit/communication/ops rows match; idempotent on re-run."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "Accepted count, total converted, and per-location converted totals agree between a Python filter and an independent SQL aggregate query."
       }
     ]
   },
+  "hazards": [
+    "Per-episode nonce and date: invoice numbers, issued_date, due_date, communication subject, and ops_report all embed the live batch_code/episode_date. Any hardcoded value fails on reseed.",
+    "Scale decoy: the snapshot has 100 estimates but only 20 are accepted; a solution that converts all 100 or all 'sent' estimates corrupts the ledger.",
+    "Status decoy: accepted estimates are mixed with 'sent' and 'draft' estimates; only 'accepted' triggers conversion.",
+    "Invoice numbering collision: the new invoice numbers must be deterministic and unique by batch and estimate digits; duplicate creation on re-run must be detected and skipped.",
+    "Owner/patient/location copy: the new invoice must preserve the exact estimate relationships. Some agents re-derive owner from patient and may pick the wrong owner.",
+    "Due date math: due_date is episode date + 21 whole days, not the estimate expires_date.",
+    "Line-item and total preservation: line_items and total_amount must be copied exactly; unit_price/quantity/description changes or rounding errors fail.",
+    "Idempotency: a re-run must not create a second invoice, second communication, or second audit per estimate, and must overwrite the same ops_report batch row."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "query": "veterinary software convert estimate to invoice workflow",
         "top_results": [
-          "Account for receivables with a written policy - dvm360",
-          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
-          "Effective credit & collection techniques - dvm360"
+          "eVetPractice Estimate to Invoice Conversion",
+          "Vetstoria Invoice from Estimate Feature",
+          "Covetrus Pulse Estimates and Invoices"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Three-collection transaction with audit trail and nonce-derived numbering; skipping the audit entry is the common shortcut that fails."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary estimate accepted converted invoice batch code ops report communication audit",
+        "top_results": [
+          "Convert Accepted Estimates to Invoices with Audit Trail",
+          "Vet Estimate-to-Invoice Batch with Owner Notice",
+          "Practice Management Estimate Conversion Reporting"
+        ]
+      }
+    ],
+    "differentiation_note": "Expands a single three-collection conversion into a multi-collection workflow with owner notification, audit trail, and summary reporting. Uses per-episode nonce-derived numbering, 10x scale accepted-estimate population, and SQL/Python dual-path aggregate verification."
   }
 }

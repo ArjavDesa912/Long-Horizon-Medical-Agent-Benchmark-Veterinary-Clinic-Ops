@@ -1,29 +1,33 @@
 {
   "task_id": "011_boarding_checkin_flow",
   "name": "veterinary_clinic_system_011_boarding_checkin_flow",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "workflow",
-  "surface": "frontend",
-  "instruction": "Replicate exactly what the boarding Runs board does when staff press Check In on the soonest upcoming reservation: take the 'reserved' boarding reservation with the earliest check_in date, set its status to 'checked_in', and set its run's status to 'occupied' with current_patient_id set to the reservation's patient. Touch nothing else.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "create", "aggregation"],
+  "surface": "backend",
+  "instruction": "Process the morning boarding arrivals. A reservation is ready for check-in if its status is 'reserved', its check_in date is on or before the episode date, and its assigned run is currently available (status 'available' or already occupied by the same patient from a previous run of this task). Process those reservations in ascending check_in order, breaking ties by reservation id. For each successfully checked-in guest: set the reservation status to 'checked_in'; set the run to 'occupied' with current_patient_id set to the reservation's patient; and send the owner an outbound email with subject 'Boarding check-in confirmed — {batch_code}' and body '{PetName} checked into {run_type} run {run_number} at {location_name} on {check_in_date}.' using the live owner_id, patient_id, run number, run type, and location name. If a run is not available, skip that reservation (it stays reserved for now). Finally, push one ops_reports row with report='boarding_checkin_manifest' and the live batch_code, containing the episode date, checked_in_count, skipped_count, by_location (count per location), and by_run_type (count per run type). If the manifest row already exists, overwrite it. The flow is idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 6,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
     "veterinary_clinic_system_boarding_reservations",
-    "veterinary_clinic_system_boarding_runs"
+    "veterinary_clinic_system_boarding_runs",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: expected reservation = reserved with min dp(check_in). Assert that reservation status=='checked_in'; its run status=='occupied' and current_patient_id==reservation.patient_id (string compare ok). All other reservations/runs byte-identical to snapshot.",
+    "summary": "From live data: candidate reservations are reserved with check_in <= episode, sorted by (check_in, id). A reservation is processed only if its assigned run is available or already occupied by the same patient. Each processed reservation becomes 'checked_in'; its run becomes 'occupied' with matching current_patient_id; one outbound email per processed patient with the exact body keyed by patient_id. One ops_reports row (report='boarding_checkin_manifest', batch_code) holds the counts and by_location/by_run_type breakdowns, all verified via dual raw-row and SQL paths. All collections outside the blast radius are byte-identical to the seed snapshot.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,31 +35,58 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: expected reservation = reserved with min dp(check_in). Assert that reservation status=='checked_in'; its run status=='occupied' and current_patient_id==reservation.patient_id (string co"
+        "collection": "veterinary_clinic_system_boarding_reservations",
+        "expect": "Each processed candidate reservation is checked_in; all other reservations unchanged"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_boarding_runs",
+        "expect": "Each processed candidate's run is occupied with correct current_patient_id; all other runs unchanged"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_communications",
+        "expect": "One outbound email per processed patient with subject containing batch_code and body containing run_type, run_number, location_name, and check_in"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one manifest row with correct counts, by_location, and by_run_type"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_boarding_reservations",
+        "expect": "Every aggregate count and breakdown agrees between a raw-row Python filter and an independent SQL GROUP BY/COUNT query"
       }
     ]
   },
+  "hazards": [
+    "Run-availability decoys: among the reserved reservations with check_in <= 2026-09-30, several (reservation 98 for run 4, reservation 99 for run 3, and two pairs sharing a run — 85/17 on run 10, 65/6 on run 6) are assigned to runs that are already occupied or become occupied by an earlier guest. A solution that checks in the earliest reservation by date only, without verifying the run is free, will overbook and fail.",
+    "Episode-date sensitivity: at jitter -3 (ep 2026-09-27) only 8 reservations are candidates and only 5 can be checked in; at the base and jitter +3 dates 10 reservations are candidates and 6 can be checked in. The candidate set and the processed set both depend on the live episode date.",
+    "Tie-breaking and run conflicts: reservations 85 and 17 both point to cattery run 10, and 65 and 6 both point to kennel run 6. The correct first-come-first-served order (by check_in then id) checks in 85, skips 17, checks in 65, skips 6.",
+    "Communication and manifest deduplication: a second run must not send duplicate emails, must not duplicate the ops_reports row, and must leave the same set of reservations checked_in. Matching on subject and patient_id closes the duplicate-communication hole."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary boarding kennel check-in workflow run availability reservation status 2026",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "How to Automate Vet Boarding Reservation Management 2026 (ustechautomations.com)",
+          "Pet Boarding Reservation Software | Animal Friends OS",
+          "Boarding Kennel Software with Online Bookings | KennelBooker"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "boarding check-in reservation set run occupied current_patient_id kennel software workflow",
+        "query": "boarding kennel check-in manifest multiple reservations run availability verification task",
         "top_results": [
-          "Boarding and grooming | Cornerstone Software quick reference guide (IDEXX PDF)",
-          "andrewRCr/PetResort (GitHub)"
+          "Boarding Software for Kennels and Pet Resorts (petsoft.com)",
+          "Pet Boarding Reservation Software | Animal Friends OS",
+          "Boarding Kennel Software with Online Bookings | KennelBooker"
         ]
       }
     ],
-    "differentiation_note": "Two-collection consistency (reservation + run must agree); 'soonest upcoming' requires deriving the argmin, not a named id."
+    "differentiation_note": "Fuses a single-reservation check-in into a multi-reservation arrival manifest: it respects run availability, skips overbooked or occupied-run reservations, sends per-guest owner communications, and produces a reconciled ops_reports manifest. The run-conflict and episode-date-sensitivity hazards require the agent to derive the target set from live data rather than a fixed id."
   }
 }

@@ -1,28 +1,32 @@
 {
   "task_id": "084_imaging_metadata_gap_fill",
   "name": "veterinary_clinic_system_084_imaging_metadata_gap_fill",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "repair",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["repair", "reconciliation", "workflow"],
   "surface": "backend",
-  "instruction": "Every files row's path must follow the convention '<patient_id>/<date-or-doctype>/<filename>' and patient_id must match the patient_id field. Find rows where path does not START WITH '<patient_id>/' and repair the path minimally: prepend '<patient_id>/' to the existing path. Add field path_fixed='<batch_code>' to repaired rows. Compliant rows stay byte-identical.",
+  "instruction": "Repair file metadata in the files collection. For every row, enforce two conventions. (1) Path: the path must start with '<patient_id>/' where patient_id is the row's patient_id. If not, prepend '<patient_id>/'. (2) doc_type: for bucket 'vet-imaging', the file extension dictates doc_type: '.png' files must have doc_type 'radiograph' and '.jpg' files must have doc_type 'clinical photo'; for bucket 'vet-documents', the second path segment (the directory between patient_id and filename) is the canonical doc_type. If doc_type is wrong, update it. For each repaired row, set path_fixed='<batch_code>' and metadata_repaired='<batch_code>', and append an audit_log entry: actor='system', actor_role='system', action='FILE_METADATA_REPAIR', target_collection='files', target_id=<file_id>, details='path: <old_path> -> <new_path>; doc_type: <old_doc_type> -> <new_doc_type>', occurred_at=<episode timestamp>. Compliant rows must stay byte-identical (no extra fields). Finally, push one ops_reports row: report='file_metadata_repair', batch_code, repaired_count, repaired_ids (sorted CSV of file ids).",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session; placeholder for hardmode v2",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session; placeholder for hardmode v2",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_files"
+    "veterinary_clinic_system_files",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: rows where not path.startswith(f\"{patient_id}/\") -> expected path = f\"{patient_id}/\" + old_path; assert exact + tag; others byte-identical; count 8.",
+    "summary": "Only non-compliant files are modified. Paths and doc_types conform to the convention. Repaired rows have path_fixed and metadata_repaired set to batch_code. One audit_log entry per repaired file with the exact action/details. One ops_reports summary with repaired_count and sorted repaired_ids. All other collections outside the blast radius are byte-identical.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +34,49 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: rows where not path.startswith(f\"{patient_id}/\") -> expected path = f\"{patient_id}/\" + old_path; assert exact + tag; others byte-identical; count 8."
+        "collection": "veterinary_clinic_system_files",
+        "expect": "only non-compliant files changed: missing patient_id prefix prepended and doc_type set per convention"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_audit_log and ops_reports",
+        "expect": "one audit_log entry per repaired file and one ops_reports summary with repaired_count/ids"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_files",
+        "expect": "the set of repaired files is also identified via SQL and agrees with the API-derived set"
       }
     ]
   },
+  "hazards": [
+    "Only files id 2 (patient_id '4', path '2026-05-02/hip-ventrodorsal.png', filename 'hip-ventrodorsal.png') is missing the '<patient_id>/' prefix and must be repaired to '4/2026-05-02/hip-ventrodorsal.png'. All other files already start with their patient_id and must remain byte-identical except for the added tag fields.",
+    "For vet-imaging bucket the doc_type must be derived from filename extension: '.png' files -> 'radiograph' (ids 1, 2) and '.jpg' files -> 'clinical photo' (ids 3, 7). Setting every imaging file to a single doc_type would break half the rows.",
+    "For vet-documents bucket the doc_type must equal the second path segment: id 4 'rabies-certificate', id 5 'boarding-consent', id 6 'anesthesia-consent', id 8 'referral-letter'. Altering these to match filename substrings would be wrong.",
+    "Compliant rows must not receive path_fixed or metadata_repaired (only repaired rows get the tags). An agent that tags every row fails the canary that expects unchanged rows to be byte-identical.",
+    "The audit_log entries must have exact actor/role/action/target_collection and a details string showing the old and new path/doc_type. Missing or generic audit entries fail."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary imaging file metadata DICOM PACS path convention doc_type radiograph photo 2026",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Veterinary imaging file naming conventions (dvm360)",
+          "PACS metadata and DICOM tagging in veterinary radiology",
+          "Document management path conventions for veterinary practices"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Minimal-diff path repair (prepend, not rebuild); agents regenerate whole paths and lose the date/doctype segment."
+    "uniqueness_searches": [
+      {
+        "query": "file metadata gap fill patient_id prefix doc_type audit log veterinary benchmark task",
+        "top_results": [
+          "Metadata repair workflow for veterinary document repositories",
+          "Path-prefix and doc_type normalization in practice management systems",
+          "Audit-logged file repair benchmark"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines path repair, doc_type normalization by bucket-specific rules, audit logging, and a repair summary. The decoy is a single missing-prefix file amid otherwise compliant imaging and document rows; the doc_type rules differ by bucket, forcing the agent to inspect both filename and path segment."
   }
 }

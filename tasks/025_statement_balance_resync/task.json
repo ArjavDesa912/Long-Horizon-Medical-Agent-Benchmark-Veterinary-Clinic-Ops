@@ -1,28 +1,33 @@
 {
   "task_id": "025_statement_balance_resync",
   "name": "veterinary_clinic_system_025_statement_balance_resync",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "repair",
+  "category": ["repair", "create", "aggregation"],
   "surface": "backend",
-  "instruction": "An auditor found that owner balances have drifted from the invoice ledger. The correct balance for each owner is the sum of (total_amount - amount_paid) over that owner's invoices with status 'sent' or 'overdue' \u2014 paid and draft invoices don't count. Set every owner's balance to exactly that computed amount (which may be 0), then add balance_resynced='<batch_code>' to every owner row whose balance you changed. Do not create or delete owners, and change no other fields. Do not modify billing_invoices.",
+  "instruction": "Run the end-of-month accounts-receivable close for the practice, batched under the episode batch code and as of the episode date. This mission has four parts, all derived independently from live data. (1) Age the open invoice ledger: every billing invoice with status 'sent' and due_date strictly before the episode date becomes 'overdue'. Do not touch invoices with any other status, and do not flip any 'sent' invoice that is not yet due. (2) Recompute every owner's balance as the sum of unpaid amounts (total_amount - amount_paid) across that owner's billing invoices with status 'sent' or 'overdue'. Paid and draft invoices do not count. Set each owner's balance to the computed amount. For every owner whose balance changed from the original seed state, add balance_resynced='<batch_code>'. (3) Push one ops_reports row with report='ar_reconciliation' and the live batch_code containing: episode_date, open_invoice_count, overdue_invoice_count, total_ar_cents, resynced_owner_count, and owner_balances (a map from owner_id to the new non-zero balance; omit zero balances). (4) For every owner whose balance you changed, push one outbound email communications row: subject='Statement balance resynced <batch_code>', body='Your updated account balance is $<balance with 2 decimals>.', channel='email', direction='outbound', logged_by='Billing', occurred_at the episode timestamp, owner_id set, and patient_id set to the patient from that owner's largest open invoice. If any report or communications already exist for this batch, overwrite them so the result is idempotent. Do not modify any collection outside the blast radius.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 13,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_owners"
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_owners",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_communications"
   ],
   "success_criteria": {
-    "summary": "Canary billing_invoices first (agent must not touch it). Compute per-owner ledger sums from LIVE invoices. For each owner: assert cents(balance)==expected and (balance differs from snapshot <=> has balance_resynced==nonce). All other owner fields unchanged vs snapshot; count 22.",
+    "summary": "Aging flips only sent invoices that are strictly past due (both seeded sent invoices are past due at all allowed episode dates). Owner balances are recomputed from live sent/overdue invoices only (draft/paid excluded). Changed owners are tagged with the batch nonce and sent a statement communication. The ops_reports ar_reconciliation row contains the live aggregates and a per-owner non-zero balance map. Every aggregate (open/overdue counts, total AR cents, resynced count, owner balances) is recomputed two independent ways (raw-row Python filter and SQL GROUP BY/SUM) and all three sources (Python, SQL, and the agent's written report) must agree. All collections outside the blast radius are byte-identical to the seed snapshot.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +35,59 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Canary billing_invoices first (agent must not touch it). Compute per-owner ledger sums from LIVE invoices. For each owner: assert cents(balance)==expected and (balance differs from snapshot <=> has ba"
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "Sent invoices that are past due are now status='overdue'; all other invoices are byte-identical to the seed snapshot except for allowed status/updated_at changes on the target rows"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_owners",
+        "expect": "Each owner balance equals the sum of unpaid on their live sent/overdue invoices, and balance_resynced is present exactly on the owners whose balance differs from the snapshot"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one ar_reconciliation row for this batch_code with the live aggregates and the correct owner_balances map"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_communications",
+        "expect": "One statement communication per resynced owner with exact subject/body/occurred_at and the correct owner_id/patient_id; no seeded communication modified"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "open_invoice_count, overdue_invoice_count, total_ar_cents, and owner-level AR sums are computed both by raw-row Python filter and by independent SQL GROUP BY/SUM and the two agree"
       }
     ]
   },
+  "hazards": [
+    "Draft invoice INV-1003 (owner 3, $546.00, due 2026-09-23) is seeded with a past-due date and a large unpaid balance, but its status is 'draft' and must be excluded from both the aging flip and the AR balance calculation. A solution that treats draft as billable will incorrectly add $546.00 to owner 3 and produce a wrong report.",
+    "257 paid invoices have amount_paid equal to total_amount (zero residual) and due dates spread across the prior year; they are decoys for the AR calculation. Only the two 'sent' invoices (INV-1001 for owner 1, $523.00, due 2026-08-21; INV-1002 for owner 2, $214.00, due 2026-09-20) are open and become overdue at the episode date.",
+    "The episode date jitters ±3 days around 2026-09-30 (env.py), so the overdue boundary must be a strict 'due_date < episode' comparison; both sent invoices are past due at every allowed episode, but a boundary off by one could matter on reseeded data.",
+    "Owner balances in the seed snapshot are deliberately stale: owner 1 balance is $134.00 while the ledger says $523.00, and owner 2 balance is $0.00 while the ledger says $214.00. The other 218 owners have $0.00 AR. Only the two drifted owners should receive the balance_resynced tag and the statement communication; blanket-tagging all owners or skipping the communication fails.",
+    "The ops_reports ar_reconciliation row must contain the live, post-mutation aggregates and a non-zero-only owner_balances map. Hardcoded counts or a map containing zero-balance owners fail because the derivation must come from the live invoice ledger."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "query": "veterinary accounts receivable aging statement balance resync overdue sent invoices",
         "top_results": [
-          "Account for receivables with a written policy - dvm360",
-          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
-          "Effective credit & collection techniques - dvm360"
+          "Important steps before you do an end-of-month statement | ezyVet Knowledge Center",
+          "Account Receivables & Accounts Receivable Reconciliation Reports | DaySmart Vet Help Center",
+          "FAQs: Aged accounts receivable and finance charges – IDEXX Neo"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Derived-value repair where the correct answer is a computed aggregate, and only-drifted-rows-get-tagged is a second derivable assertion; blanket-tagging fails."
+    "uniqueness_searches": [
+      {
+        "query": "accounts receivable resync owner balance invoice ledger aging report task benchmark",
+        "top_results": [
+          "Accounts Receivable Aging Report: Free Excel Template",
+          "Accounts Receivable Reconciliation: Step by Step | Growthy",
+          "Accounts Receivable Reconciliation: A Guide for 2026"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgrades a single-row balance repair into a multi-collection AR close: invoice aging, owner-balance resync, a cross-collection ops_reports summary, and owner statement communications, all verified by dual Python/SQL path on every aggregate and by canary checks on the non-write collections."
   }
 }

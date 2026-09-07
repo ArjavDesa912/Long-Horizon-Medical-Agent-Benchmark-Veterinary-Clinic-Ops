@@ -1,19 +1,21 @@
 {
   "task_id": "062_transfer_approval_flow",
   "name": "veterinary_clinic_system_062_transfer_approval_flow",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "workflow",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "reconciliation", "aggregation"],
   "surface": "frontend",
-  "instruction": "Process the transfer queue the way the Locations \u2192 Transfers screen does. For every location_transfers row with status 'pending' whose note does NOT contain the word 'Specialist' (specialist referrals stay pending for the medical director): set status 'completed', completed_at = episode timestamp; rewrite the patient's location_id to the transfer's to_location_id; and append one audit_log row {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'TRANSFER_COMPLETED', target_collection: 'patients', target_id: <patient id as string>, details: 'Transfer completed <batch_code>: loc <from> -> loc <to>.', occurred_at: episode timestamp}. The already-'approved' transfer is out of scope for this queue and stays untouched.",
+  "instruction": "Process the transfer queue the way the Locations \u2192 Transfers screen does. For every location_transfers row with status 'pending' whose note does NOT contain the word 'specialist' (case-insensitive), complete it: set status to 'completed', completed_at to the episode timestamp, update the patient's location_id to the transfer's to_location_id, and append one audit_log row {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'TRANSFER_COMPLETED', target_collection: 'patients', target_id: <patient id>, details: 'Transfer completed <batch_code>: loc <from> -> loc <to>.', occurred_at: episode timestamp}. Leave specialist-hold and already-approved transfers untouched. Then push one ops_reports row {report: 'transfer_sweep', batch_code, completed_now, specialist_holds, approved_untouched, completed_total} computed from the live queue, send one communications summary to owner id '1' with subject 'Transfer sweep <batch_code>' and body 'Processed <completed_now> routine transfer(s); <specialist_holds> specialist hold(s); <approved_untouched> pre-approved transfer(s); <completed_total> completed in total.', and make the whole sweep idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 12,
+  "max_steps": null,
+  "par_steps": null,
+  "_par_steps_note": "placeholder -- measure via live gold run in QC session",
+  "_max_steps_note": "placeholder -- set to roughly par_steps * 1.5 after live measurement",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -21,34 +23,46 @@
   "blast_radius": [
     "veterinary_clinic_system_location_transfers",
     "veterinary_clinic_system_patients",
-    "veterinary_clinic_system_audit_log"
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_communications"
   ],
   "success_criteria": {
-    "summary": "From snapshot: pending transfers without 'Specialist' in note (2 of 3). For each: status completed + completed_at; patient.location_id == to_location_id; one audit row exact. Assert approved transfer + 'Specialist' pending byte-identical; patients otherwise unchanged; audit count 4+2.",
+    "summary": "The two seed pending non-specialist transfers are completed, have completed_at on the episode date, and the corresponding patients' location_id is rewritten to to_location_id. The specialist-hold and approved transfers and their patients remain untouched. There are exactly two new TRANSFER_COMPLETED audit rows, one ops_reports transfer_sweep row, and one communications summary. All counts are derived independently from the live state and the seed snapshot, with dual-path (Python and SQL) verification where applicable.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: pending transfers without 'Specialist' in note (2 of 3). For each: status completed + completed_at; patient.location_id == to_location_id; one audit row exact. Assert approved transfer "
-      }
+      {"type": "canary_hash", "collections": "all seeded collections outside blast_radius"},
+      {"type": "derived_rows", "collection": "location_transfers, patients, audit_log, ops_reports, communications", "expect": "target transfers completed with patient moves; non-targets untouched; one report and one comm with live counts"},
+      {"type": "dual_path", "collection": "veterinary_clinic_system_location_transfers", "expect": "status counts and completed_now agree between Python and SQL"}
     ]
   },
+  "hazards": [
+    "specialist-hold decoy: transfer id 7 has status 'pending' and note 'Specialist follow-up at Riverside' (capital S); a case-insensitive 'specialist' check is required, otherwise patient 30 is incorrectly moved.",
+    "approved-transfer decoy: transfer id 4 has status 'approved' and empty note; a solution that processes all non-completed rows (or all rows without 'specialist' regardless of status) will move patient 19 and fail.",
+    "pre-existing completed transfers (ids 3, 5, 6) must remain exactly as seeded; the audit trail for this batch is independent and must not alter them.",
+    "idempotency: re-running must not create duplicate audit rows, duplicate communications, or duplicate ops_reports; the sweep keys its report/communication by batch.",
+    "patient location consistency: the patient's new location_id must equal the transfer's to_location_id, not from_location_id."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice patient transfer between locations workflow audit trail",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Managing Multi-Location Veterinary Practices (aaha.org)",
+          "Patient Transfer and Records Workflow (ezyvet.com)",
+          "Veterinary Practice Location Transfer Best Practices (vetstoria.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Three-collection cascade with a text-based exclusion ('Specialist' notes) and an out-of-scope decoy status ('approved')."
+    "uniqueness_searches": [
+      {
+        "query": "RL environment transfer approval flow specialist hold audit log ops report",
+        "top_results": [
+          "Veterinary clinic ops benchmark: transfer queue (github.com)",
+          "Long-horizon agent task with audit trail and decoy rows (paperform.co)",
+          "Multi-location workflow verification benchmark (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines a status + text-filter queue sweep, patient-location rewrite, audit trail, live-count report, and summary communication. The case-insensitive specialist exclusion and the approved-state decoy are classic front-desk logic that separate it from simple state-machine tasks."
   }
 }

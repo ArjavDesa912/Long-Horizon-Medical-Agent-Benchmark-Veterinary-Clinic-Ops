@@ -1,17 +1,19 @@
-# 056_lab_flag_summary — REDTEAM notes
+# 056_lab_flag_summary — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-One ops_reports row {report: 'lab_flags', batch_code, critical: <count of lab_results with flag 'critical'>, abnormal: <count 'abnormal'>, normal: <count 'normal'>, total: <all rows>}.
+Produce the lab flag snapshot for this episode in `ops_reports` with three levels: a rollup of all `lab_results` flags, a per-`test_name` breakdown, and a per-species breakdown that joins `patients`. All counts must be exact and percentages rounded to one decimal.
 
 ## Why this is hard / unique
-Baseline distribution report; ensures the ops_reports channel is exercised with exact counts.
+- Three-level aggregation (rollup, by-test, by-species) from a single source table.
+- Species breakdown requires a correct `patients` join.
+- `critical` is its own flag category, not a flavor of `abnormal`.
+- Dual-path (SQL vs Python) verification on every count.
+- Delete-then-rewrite idempotency per batch.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- `lab_results` id=1 is the only row with `flag='critical'` (Serum chemistry panel, patient 4). Row evidence: `"flag": "critical"` appears once in the 42-row collection.
+- `lab_results` id=7 references patient 27, whose `patients` row has `"status": "transferred"`. A species rollup that naively excludes transferred patients under-counts feline.
+- The by-species and by-test row sets are dynamic; hardcoded row lists fail on reseed.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

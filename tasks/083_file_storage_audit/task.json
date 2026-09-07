@@ -1,19 +1,21 @@
 {
   "task_id": "083_file_storage_audit",
   "name": "veterinary_clinic_system_083_file_storage_audit",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation", "workflow"],
   "surface": "backend",
-  "instruction": "Storage audit for the practice's file metadata. One ops_reports row per bucket present in the files collection: {report: 'storage_audit', batch_code, bucket, file_count, total_bytes: <sum size_bytes>, total_mb: <round(total_bytes /1048576, 2)>, doc_types: <comma-joined sorted distinct doc_type values>}.",
+  "instruction": "Run the file storage audit and path-compliance check. Do not modify the files collection. Write to ops_reports: (1) one storage_audit row per bucket present in files with bucket, file_count, total_bytes, total_mb (round to 2 decimals using 1048576 bytes per MB), doc_types (comma-joined sorted distinct doc_type values), and content_types (comma-joined sorted distinct content_type values); (2) one storage_path_audit row for every file whose path does not start with '<patient_id>/' (its patient_id field) with exception_type='missing_patient_prefix', file_id, bucket, patient_id, observed_path, and expected_path = '<patient_id>/' + observed_path. The path-compliance rows must be derived from the live files data, not hardcoded.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session; placeholder for hardmode v2",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session; placeholder for hardmode v2",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live files; exact ints, mb within 0.005, sorted CSV; rows == distinct buckets (2); nonce.",
+    "summary": "ops_reports contains one storage_audit row per bucket and one storage_path_audit row per non-compliant file. Bucket totals agree with an independent SQL SUM and the exception list agrees with an independent SQL query. The files collection is byte-identical to the seed snapshot.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +32,43 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live files; exact ints, mb within 0.005, sorted CSV; rows == distinct buckets (2); nonce."
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "storage_audit per bucket and storage_path_audit per missing-patient-prefix file"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_files",
+        "expect": "bucket totals and exception counts are also derived via SQL and agree with Python"
       }
     ]
   },
+  "hazards": [
+    "Only files id 2 (patient_id '4', path '2026-05-02/hip-ventrodorsal.png') is missing the '<patient_id>/' prefix. All other 7 files start with their patient_id (seed_snapshot.json rows id 1 '1/...', id 3 '10/...', id 4 '1/...', id 5 '2/...', id 6 '6/...', id 7 '13/...', id 8 '15/...'). An over-broad audit that reports every file as an exception fails.",
+    "files id 3 has path '10/2025-11-20/hooft-crack-photo.jpg' with a date second segment and a filename typo. It is prefix-compliant because it starts with patient_id '10'; a rule that also requires the second path segment to equal doc_type would incorrectly flag it.",
+    "The two buckets are 'vet-imaging' (4 files, total 560328 bytes, doc_types 'clinical photo,radiograph', content_types 'image/jpeg,image/png') and 'vet-documents' (4 files, total 163420 bytes, doc_types 'anesthesia-consent,boarding-consent,rabies-certificate,referral-letter', content_types 'application/pdf'). MB must be total_bytes / 1048576 rounded to 2 decimals (0.53 and 0.16), not /1000000.",
+    "The files collection must not be modified. 083 is an audit; the path repair is handled by a separate task."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice file storage audit bucket metadata doc_type content type 2026",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Veterinary practice document storage and imaging PACS integration",
+          "DICOM and veterinary imaging file management best practices",
+          "Metadata auditing for cloud document storage in vet practices"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Byte-to-MB unit conversion (1048576, not 1000000) and sorted distinct lists."
+    "uniqueness_searches": [
+      {
+        "query": "file storage audit bucket summary path compliance veterinary benchmark task",
+        "top_results": [
+          "Storage metadata audit benchmark for document repositories",
+          "Bucket-level file count and size with path-convention checks",
+          "Veterinary imaging storage path prefix compliance"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines bucket-level aggregation (count/bytes/MB/doc_types/content_types) with a path-convention compliance report, requiring the agent to derive both from the same small but adversarial files collection. The decoy is a single missing-prefix file amid otherwise-compliant rows."
   }
 }

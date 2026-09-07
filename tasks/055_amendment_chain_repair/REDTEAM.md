@@ -1,17 +1,20 @@
-# 055_amendment_chain_repair — REDTEAM notes
+# 055_amendment_chain_repair — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-The immutability rule says locked notes are amended by appending a NEW linked record, never edited. Someone edited locked notes in place: any visit_records row with locked_at set whose updated_at is LATER than its locked_at was tampered with. For each tampered row: leave the row itself alone, but append a correction record {patient_id, provider_id, location_id copied, visit_date = episode date, subjective: 'Amendment of <dp(visit_date)> note: record was modified after locking; content under review.', objective: '', assessment: 'Amendment pending clinical review.', plan: 'Original note quarantined for compliance.', weight_kg copied from the tampered row, problems: [], locked_at: null, amends: <tampered row id as string>, batch: '<batch_code>'}. If no tampered rows exist, do nothing.
+Repair the locked-visit-note amendment chain for this episode. Detect every locked `visit_records` row whose `updated_at` is later than its `locked_at`, leave the original untouched, append a linked amendment row in `visit_records`, and produce an `ops_reports` `amendment_chain` summary row with counts and a per-location breakdown.
 
 ## Why this is hard / unique
-Forensic detection (updated_at vs locked_at) + append-only correction protocol — the opposite instinct (editing the note) fails.
+- Forensic rule is implicit in the timestamps, not stated as a row list.
+- Originals must remain byte-identical; the correct action is append-only.
+- Large blast radius (344 amendments) makes manual inspection infeasible.
+- Re-run idempotency and duplicate-prevention are required.
+- Dual-path (Python filter vs SQL) verification on all derived counts.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- `visit_records` id=371 has `locked_at:null` and an empty `plan`; it is an incomplete note but not a tampered locked note (row-level evidence: `"locked_at": null, "plan": ""`).
+- Multiple unlocked rows (e.g., id=27, 57, 86, 90, 114) have `locked_at:null` and must not receive amendments.
+- `audit_log` has 4 rows (TRANSFER_COMPLETED, OWNER_MERGE, CS_LOG_APPENDED, ESTIMATE_CONVERTED) and none target `visit_records`, so an agent relying on the audit log will find nothing.
+- The timestamp comparison must be string-compare of ISO 8601 `updated_at > locked_at`; in this seed all 344 locked rows are tampered, but `updated_at` is the build timestamp and `locked_at` is an earlier date.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

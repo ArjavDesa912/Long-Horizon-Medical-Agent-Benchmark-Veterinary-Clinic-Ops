@@ -1,6 +1,6 @@
 """
 Gymnasium-compatible RL environment wrapper for the veterinary_clinic_system
-rl-env Docker image (frontend + VibeDB BaaS + Postgres 15, pre-seeded at build
+rl-env Docker image (frontend + Stackhouse BaaS + Postgres 15, pre-seeded at build
 time).
 
 Upgrades over the original reference implementation (per RL_ENV_FACTORY_PROMPT
@@ -36,7 +36,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import gymnasium as gym
@@ -62,8 +62,8 @@ def _sha256(path: str) -> str:
         return hashlib.sha256(f.read()).hexdigest()
 
 
-class VibeDBEnv(gym.Env):
-    """Gymnasium environment that drives one rl-env container via the VibeDB REST API."""
+class StackhouseEnv(gym.Env):
+    """Gymnasium environment that drives one rl-env container via the Stackhouse REST API."""
 
     metadata = {"render_modes": []}
 
@@ -114,7 +114,7 @@ class VibeDBEnv(gym.Env):
                 if os.path.exists(fpath):
                     self._task_file_hashes[fname] = _sha256(fpath)
 
-        self.max_steps = max_steps or (self.task or {}).get("max_steps", 50)
+        self.max_steps = max_steps or (self.task or {}).get("max_steps") or 50
 
         # The action is a JSON-describable dict; Gymnasium's Text space needs bounds,
         # so payload is carried as a JSON-encoded string rather than a nested Dict.
@@ -149,8 +149,8 @@ class VibeDBEnv(gym.Env):
         self.close()  # idempotent: tear down any previous container first
 
         exposed = self._image_exposed_ports()
-        vibedb_container_port = 8080
-        app_candidates = [p for p in exposed if p != vibedb_container_port]
+        stackhouse_container_port = 9090
+        app_candidates = [p for p in exposed if p != stackhouse_container_port]
         if not app_candidates:
             raise RuntimeError(
                 f"Could not determine APP_PORT for image {self.image}: "
@@ -167,7 +167,7 @@ class VibeDBEnv(gym.Env):
             cmd.append("--rm")
         cmd += [
             "-p", f"{self.host_app_port}:{self.container_app_port}",
-            "-p", f"{self.host_baas_port}:{vibedb_container_port}",
+            "-p", f"{self.host_baas_port}:{stackhouse_container_port}",
             self.image,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -194,7 +194,7 @@ class VibeDBEnv(gym.Env):
         # Phase 3a.3 — per-episode nonce injection, before first observation.
         self.nonce_value = self._inject_nonce()
 
-        # The VibeDB backend can return 503 for a second or two after the first
+        # The Stackhouse backend can return 503 for a second or two after the first
         # authenticated request; a short settle window prevents gold/verifier races.
         import time
         time.sleep(2)
@@ -266,19 +266,24 @@ class VibeDBEnv(gym.Env):
         collection = suffix if suffix.startswith(f"{self.app_slug}_") else f"{self.app_slug}_{suffix}"
         token = f"EP-{secrets.token_hex(4).upper()}"
         now = datetime.now(timezone.utc)
-        # The seed data spans Aug/Sep 2026; use a fixed month-end business date so
-        # all date-bound tasks (boarding checkout/overstay/no-show, AR aging, etc.)
-        # have meaningful, non-empty target sets across the whole benchmark.
-        business_date = "2026-09-30"
+        # The seed data spans Aug/Sep 2026 relative to image build time; a fixed
+        # month-end anchor keeps every date-bound task's target set non-empty.
+        # Hardmode: jitter ±3 days per episode (Hard Rule 5 — randomize beyond
+        # just the nonce) so a boundary count memorized from a prior episode is
+        # wrong, not just stale. Still anchored near month-end, not a free
+        # random date, so overdue/upcoming windows stay meaningfully populated.
+        base_date = datetime(2026, 9, 30, tzinfo=timezone.utc).date()
+        jitter_days = secrets.randbelow(7) - 3  # -3..+3
+        business_date = (base_date + timedelta(days=jitter_days)).isoformat()
         row = {
-            # 'meta_key' not 'key': VibeDB rejects SQL reserved keywords as
+            # 'meta_key' not 'key': Stackhouse rejects SQL reserved keywords as
             # filter identifiers (verified: ?key=... -> HTTP 400).
             "meta_key": "episode_state",
             field: token,
             "injected_at": now.isoformat(),
             # Fixed business-date anchor (not wall-clock) so every episode is
             # evaluated against the same calendar that the seed was designed for.
-            # ISO-with-time because this VibeDB build stores bare dates as NULL.
+            # ISO-with-time because this Stackhouse build stores bare dates as NULL.
             "episode_date": business_date + "T00:00:00.000Z",
         }
         # Optional per-task randomized parameters (e.g. a markup percentage the
@@ -301,7 +306,7 @@ class VibeDBEnv(gym.Env):
         return token
 
     # ------------------------------------------------------------------ #
-    # VibeDB REST helpers
+    # Stackhouse REST helpers
     # ------------------------------------------------------------------ #
 
     def _baas_url(self, path: str) -> str:
@@ -385,23 +390,40 @@ class VibeDBEnv(gym.Env):
         payload = action.get("payload")
         as_user = action.get("as_user", "verifier")
 
-        if method not in VALID_METHODS:
-            raise ValueError(f"method must be one of {VALID_METHODS}, got {method!r}")
-        if as_user not in VALID_USERS:
-            raise ValueError(f"as_user must be one of {VALID_USERS}, got {as_user!r}")
-        if not endpoint.startswith("/"):
-            raise ValueError(f"endpoint must be a path starting with '/', got {endpoint!r}")
-        if isinstance(payload, str) and payload:
-            payload = json.loads(payload)
-
-        token = self._login(as_user)
-        status, body = self._http(method, endpoint, payload, token)
+        rejection: str | None = None
+        status, body = 0, {}
+        try:
+            if method not in VALID_METHODS:
+                raise ValueError(f"method must be one of {VALID_METHODS}, got {method!r}")
+            if as_user not in VALID_USERS:
+                raise ValueError(f"as_user must be one of {VALID_USERS}, got {as_user!r}")
+            if not endpoint.startswith("/"):
+                raise ValueError(f"endpoint must be a path starting with '/', got {endpoint!r}")
+            if isinstance(payload, str) and payload:
+                payload = json.loads(payload)
+            token = self._login(as_user)
+            status, body = self._http(method, endpoint, payload, token)
+        except Exception as e:
+            # A malformed action (bad method/user/endpoint shape, a payload
+            # that isn't valid JSON, an endpoint with characters urllib
+            # rejects -- e.g. http.client.InvalidURL for a stray space, which
+            # isn't even a ValueError -- or any other dispatch failure) must
+            # not crash the whole rollout. This is the agent's action-dispatch
+            # boundary: any way the agent can produce a bad action here is
+            # exactly the kind of mistake it should see reflected in
+            # reward_reason so it can self-correct next turn, not an
+            # exception type we have to keep enumerating one at a time as new
+            # mistakes surface. Broad by design, not by accident.
+            rejection = f"Action rejected, not sent to Stackhouse: {e}"
 
         self._step_count += 1
         reward, reward_info = self._compute_reward()
         observation = self._get_observation()
         terminated = reward >= 1.0
         truncated = (not terminated) and self._step_count >= self.max_steps
+
+        if rejection:
+            reward_info = {**reward_info, "reward_reason": rejection}
 
         info = {
             "status_code": status,
@@ -431,7 +453,7 @@ class VibeDBEnv(gym.Env):
 
         env_vars = dict(
             os.environ,
-            VIBEDB_URL=f"http://127.0.0.1:{self.host_baas_port}",
+            STACKHOUSE_API_URL=f"http://127.0.0.1:{self.host_baas_port}",
         )
         try:
             result = subprocess.run(

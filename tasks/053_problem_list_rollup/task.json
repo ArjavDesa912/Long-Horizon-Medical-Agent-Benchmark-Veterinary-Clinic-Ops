@@ -1,19 +1,21 @@
 {
   "task_id": "053_problem_list_rollup",
   "name": "veterinary_clinic_system_053_problem_list_rollup",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "idempotency"],
   "surface": "backend",
-  "instruction": "Build the practice's chronic-disease census. Across all visit_records' problems arrays, count ACTIVE problems by problem name. Create one ops_reports row per problem name that has at least one active occurrence: {report: 'problem_census', batch_code, problem: <name>, active_cases: <count>, distinct_patients: <count of distinct patient_ids with an active problem of this name>}. Any order; no rows for problems with zero active cases.",
+  "instruction": "Build the practice's active-problem census under this episode's batch code (read batch_code from the ops_meta row with meta_key='episode_state'). A problem counts only when its entry inside a visit_records row's problems array has status='active' — resolved or other statuses, and rows with an empty problems array, contribute nothing. Write two report sets into ops_reports, first deleting any existing rows with report in ('problem_census','problem_census_by_location') and batch_code=<batch_code>: (1) report='problem_census' — exactly one row per problem name that has at least one active occurrence anywhere, each {report:'problem_census', batch_code, problem:<name>, active_cases:<count of active occurrences across all visit rows>, distinct_patients:<count of distinct patient_ids carrying an active entry of this name>, distinct_locations:<count of distinct visit_records.location_id values where it occurs>, distinct_species:<count of distinct patients.species values among those patients>}. (2) report='problem_census_by_location' — exactly one row per (problem name, location_id) pair that has at least one active occurrence at that location, each {report:'problem_census_by_location', batch_code, problem:<name>, location_id:<that visit_records location_id>, active_cases:<count>, distinct_patients:<count of distinct patient_ids>}. No rows for zero-count names or pairs, and no other rows or collections may be touched — the census is a read of visit_records and patients only.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 11,
+  "par_steps": null,
+  "max_steps": null,
+  "_par_steps_note": "Intentionally unset — measure real gold API-call count via a live gold run in the QC session (codegen-only pass).",
+  "_max_steps_note": "Intentionally unset — set to roughly par_steps * 1.5 in the QC session per the anti-brute-force rule.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,31 +24,42 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live visit_records (problems arrays; status 'active'); exact ints per problem; exact row set; nonce.",
+    "summary": "Verifier recomputes the census from live (canary-pinned) visit_records + patients two independent ways — a raw-row Python pass over the problems arrays and an independent SQL json_array_elements/GROUP BY — and both must agree with each other and with the written ops_reports rows: exactly len(active problem names) 'problem_census' rows and len(active problem×location pairs) 'problem_census_by_location' rows for this batch_code, every field exact. All 23 other seeded collections are canary-hashed unchanged.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live visit_records (problems arrays; status 'active'); exact ints per problem; exact row set; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "(see verifier.py)", "expect": "see summary above" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_visit_records", "expect": "every active_cases / distinct_* number agrees between raw-row Python aggregation and an independent SQL json_array_elements + GROUP BY query" }
     ]
   },
+  "hazards": [
+    "Rows-vs-patients trap: patient 59 carries 'atopic dermatitis' with status='active' on two different visit rows (ids 118 and 331) — the census must report active_cases=15 but distinct_patients=14 for that name; counting rows for distinct_patients (or patients for active_cases) flips exactly one field and fails.",
+    "Status filter: resolved entries exist under the same problem names (e.g., visit id=1 has 'chronic kidney disease' status='resolved'; visit id=20 has 'atopic dermatitis' status='resolved'; visit id=19 'obesity' resolved) — filtering on name alone inflates every aggregate.",
+    "Sparse-array trap: 208 of the 371 visit rows carry an empty problems array — a solution that assumes every row has problems either crashes or fabricates phantom cases.",
+    "distinct_species requires the patients join: problem names span different species mixes (chronic kidney disease spans 5 species, hypothyroidism 3, obesity 4) — a solution that copies distinct_patients into distinct_species or guesses the species count fails field-level checks.",
+    "The (problem, location) grid must be derived, not fabricated: in this seed all 7 problem names appear at all 3 locations (21 rows), but each cell's counts differ — e.g., atopic dermatitis is 7 cases / 6 patients at location 1 but 1 case / 1 patient at location 3; uniform or cross-product guesses fail.",
+    "Idempotency: the report set is deleted-then-rewritten keyed by (report, batch_code); a naive re-run double-pushes duplicate rows and fails the exact row-count checks."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "veterinary problem list chronic disease census active problems report clinic",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "PetChart SOAP note software — active problem-list carryforward and structured problem data",
+          "IDEXX Cornerstone EMR workbook — problem list with Active/Inactive status and census views",
+          "Clinician's Brief — master problem list as the longitudinal record of comorbid conditions"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Nested-array aggregation (problems is a JSON array inside rows) with distinct-patient counting \u2014 agents count rows instead of patients."
+    "uniqueness_searches": [
+      {
+        "query": "RL benchmark task nested JSON problem array census distinct patients locations species two-level rollup",
+        "top_results": [
+          "No public benchmark task found combining nested problem-array aggregation with distinct-patient and per-location dimensions",
+          "Existing medical-record aggregation tasks are flat row counts, not array-element unnesting",
+          "Veterinary problem-list documentation describes the concept but not a verifiable multi-dimensional census"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgrades v1's single-level problem census into a two-level rollup: per-problem totals now carry three distinct-count dimensions (patients, locations, species — the last requiring a patients join) plus a full problem×location breakdown. The seed's rows-vs-patients asymmetry (one patient with two active entries of the same problem) and the 208 empty problems arrays make naive aggregation wrong in non-obvious ways."
   }
 }

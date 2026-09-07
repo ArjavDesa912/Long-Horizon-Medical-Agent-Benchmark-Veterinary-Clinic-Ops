@@ -5,7 +5,7 @@ Shared stdlib-only helpers for veterinary_clinic_system task verifiers.
 Every verifier imports this module (sys.path insert of <env_root>/tools) and
 builds its checks from these primitives:
 
-- login / query / qone / sql        -- read-only VibeDB access (GET + login only)
+- login / query / qone / sql        -- read-only Stackhouse access (GET + login only)
 - fetch_all                         -- paginated full-collection read
 - dp(value)                         -- date-prefix normalizer ('YYYY-MM-DD')
 - cents(value)                      -- money comparison in integer cents
@@ -25,17 +25,22 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
-VIBEDB_URL = os.environ.get("VIBEDB_URL", "http://127.0.0.1:8080").rstrip("/")
+STACKHOUSE_API_URL = os.environ.get("STACKHOUSE_API_URL", "http://127.0.0.1:9090").rstrip("/")
 PREFIX = "veterinary_clinic_system_"
 SNAPSHOT_PATH = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "_expectations", "seed_snapshot.json")
 )
-HTTP_TIMEOUT = 20
+HTTP_TIMEOUT = 45  # bumped from 20s: repeatedly seen single-request timeouts under host load at 10x seed volume
+# Agent-facing FAIL reasons must never leak concrete expected/actual values (they're
+# returned to the agent via env.py's reward_reason on every step). Set VERIFIER_DEBUG=1
+# host-side (never inside the image) to get full detail on stderr for QC debugging.
+VERIFIER_DEBUG = os.environ.get("VERIFIER_DEBUG") == "1"
 PAGE = 500
 
 
@@ -52,7 +57,7 @@ def _http(method: str, path: str, payload=None, token: str | None = None, retrie
     data = json.dumps(payload).encode() if payload is not None else None
     last_code = 0
     for attempt in range(retries + 1):
-        req = urllib.request.Request(f"{VIBEDB_URL}{path}", data=data, headers=headers, method=method)
+        req = urllib.request.Request(f"{STACKHOUSE_API_URL}{path}", data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
                 body = resp.read().decode()
@@ -116,10 +121,19 @@ def qone(token: str, collection: str, doc_id) -> dict | None:
     return body.get("data")
 
 
+_WRITE_KEYWORDS = re.compile(r"\b(insert|update|delete|drop|alter|truncate|grant|revoke)\b", re.IGNORECASE)
+
+
 def sql(token: str, statement: str) -> list[dict]:
-    """Read-only SQL escape hatch. Verifiers must only ever pass SELECTs."""
-    if not statement.strip().lower().startswith("select"):
+    """Read-only SQL escape hatch. Verifiers must only ever pass SELECTs (a
+    leading read-only CTE via WITH is fine; Postgres also allows data-modifying
+    statements inside WITH, so those are blocked explicitly, not just non-SELECT
+    statements)."""
+    head = statement.strip().lower()
+    if not (head.startswith("select") or head.startswith("with")):
         raise VerifierError("verifier attempted non-SELECT SQL (read-only grading violated)")
+    if _WRITE_KEYWORDS.search(statement):
+        raise VerifierError("verifier attempted a data-modifying statement (read-only grading violated)")
     status, body = _http("POST", "/v1/sql/query", {"query": statement}, token=token)
     if status != 200:
         raise VerifierError(f"sql/query -> HTTP {status}")
@@ -138,18 +152,29 @@ def dp(value) -> str | None:
 
 
 def cents(value) -> int:
-    """Money -> integer cents with banker's-safe rounding via Decimal."""
+    """Money -> integer cents with banker's-safe rounding via Decimal. None-safe
+    (a missing monetary field is 0 cents, not a crash)."""
     from decimal import Decimal, ROUND_HALF_UP
 
+    if value is None:
+        return 0
     return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def canon(rows: list[dict]) -> str:
-    """Canonical JSON dump of a row set: sorted by id, keys sorted, None-stable."""
+    """Canonical JSON dump of a row set: sorted by id, keys sorted, None-stable.
+
+    created_at is dropped from each row: it's often server-stamped via a
+    DEFAULT now() column that seed.js never sets explicitly, so it's never
+    reproducible across separate seed runs (capture-time vs. verify-time).
+    Used identically by capture_snapshot.py (bakes the sha256) and
+    check_canaries() (recomputes it live), so both sides stay consistent.
+    """
     def key(r):
         rid = r.get("id")
         return (0, int(rid)) if isinstance(rid, int) or (isinstance(rid, str) and rid.isdigit()) else (1, str(rid))
 
+    rows = [{k: v for k, v in r.items() if k != "created_at"} for r in rows]
     return json.dumps(sorted(rows, key=key), sort_keys=True, separators=(",", ":"), default=str)
 
 
@@ -175,7 +200,13 @@ def _deep_eq(a, b) -> bool:
 def row_eq(live: dict, seed: dict, ignore: tuple = ()) -> bool:
     """Compare live row to seed, ignoring listed keys and any extra keys in live
     that are null (e.g. schema-widened columns). Ignores id type differences.
+
+    created_at is always ignored in addition to `ignore`: most seed rows don't
+    set it explicitly, so the server stamps real wall-clock insert time via a
+    DEFAULT now() column, which is never reproducible across separate seed
+    runs (e.g. a snapshot recapture vs. the final image bake).
     """
+    ignore = set(ignore) | {"created_at"}
     a = {k: v for k, v in live.items() if k not in ignore and (k in seed or v is not None)}
     b = {k: v for k, v in seed.items() if k not in ignore}
     for d in (a, b):
@@ -222,8 +253,17 @@ def canary_hash(collection: str) -> str:
 # ------------------------------------------------------------------ nonce
 
 def get_nonce(token: str, collection: str = "ops_meta", field: str = "batch_code") -> str:
-    """Read the live per-episode nonce injected by env.reset()."""
-    rows = query(token, collection, {"meta_key": "episode_state", "limit": 1})
+    """Read the live per-episode nonce injected by env.reset(). Retries
+    briefly: under concurrent container load this can outrace env.py's
+    nonce-injection write (table not yet created, or row not yet visible)."""
+    import time
+
+    rows = []
+    for attempt in range(10):
+        rows = query(token, collection, {"meta_key": "episode_state", "limit": 1})
+        if rows:
+            break
+        time.sleep(0.5 * (attempt + 1))
     if not rows:
         raise VerifierError(f"nonce row missing in {PREFIX}{collection}")
     value = rows[0].get(field)
@@ -258,11 +298,15 @@ class Verifier:
 
     def expect_equal(self, actual, expected, label: str):
         if actual != expected:
-            raise VerifierError(f"{label}: expected {expected!r}, found {actual!r}")
+            if VERIFIER_DEBUG:
+                print(f"[debug] {label}: expected {expected!r}, found {actual!r}", file=sys.stderr)
+            raise VerifierError(f"{label}: mismatch")
 
     def expect_cents(self, actual, expected, label: str):
         if cents(actual) != cents(expected):
-            raise VerifierError(f"{label}: expected {cents(expected)} cents, found {cents(actual)} cents")
+            if VERIFIER_DEBUG:
+                print(f"[debug] {label}: expected {cents(expected)} cents, found {cents(actual)} cents", file=sys.stderr)
+            raise VerifierError(f"{label}: mismatch")
 
     def check_canaries(self, collections: list[str]):
         """Byte-identity of pre-existing collections outside the blast radius."""

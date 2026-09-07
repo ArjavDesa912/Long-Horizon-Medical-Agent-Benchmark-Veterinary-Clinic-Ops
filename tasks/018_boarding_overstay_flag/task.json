@@ -1,52 +1,73 @@
 {
   "task_id": "018_boarding_overstay_flag",
   "name": "veterinary_clinic_system_018_boarding_overstay_flag",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "repair",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["update", "workflow", "aggregation"],
   "surface": "backend",
-  "instruction": "Guests still checked in past their scheduled check_out are overstays. For every reservation with status 'checked_in' whose check_out is strictly before the episode date, set status to 'overstay' and add overstay_days = <whole days between check_out and the episode date>. Reservations checking out exactly on the episode date are NOT overstays. Do not touch runs or other reservations.",
+  "instruction": "Flag every boarding overstay and notify the owners at the episode close.\n\nA reservation is an overstay if and only if its status is 'checked_in' and check_out is strictly before the episode date (check_out == episode_date is NOT an overstay).\n\nFor each overstay:\n1. Set the reservation status to 'overstay' and set overstay_days = (episode_date - check_out) whole days.\n2. Free the assigned run: set the corresponding boarding_runs status to 'available' and current_patient_id to empty.\n3. Push a communications row to the owner: channel='email', direction='outbound', subject='Overstay notice <batch_code>', body='<patient_name> (reservation <reservation_id>) was scheduled to check out on <check_out> and is still on the books as of <episode_date> — <overstay_days> day(s) overdue. Please contact the front desk.', logged_by='system', occurred_at=<episode_date with time>, owner_id, patient_id, reservation_id, batch_code. Skip if a communication with this subject and (patient_id, reservation_id) already exists for this batch.\n4. Push an audit_log entry with action='OVERSTAY_FLAGGED', actor='system', actor_role='front_desk', target_collection='boarding_reservations', target_id=<reservation_id>, details='Overstay flagged for reservation <reservation_id>: <overstay_days> days, batch <batch_code>', occurred_at=<episode_date with time>, batch_code.\n\nFinally, create exactly one ops_reports row 'boarding_overstay_summary' keyed by the live batch_code with: episode_date, overstay_count, total_overstay_days, by_run_type (dict {run_type: count}), by_location (dict {location_name: count}), by_species (dict {species: count}), and communications_count. Overwrite any existing row for this batch.\n\nDo not touch reservations with status 'reserved' or 'checked_out', even if their dates are in the past; they are no-shows or completed stays, not overstays.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_boarding_reservations"
+    "veterinary_clinic_system_boarding_reservations",
+    "veterinary_clinic_system_boarding_runs",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: checked_in with dp(check_out)<ep -> assert status=='overstay' and overstay_days==(ep-check_out).days; boundary row (==ep) must remain 'checked_in'; all other rows unchanged; count 14.",
+    "summary": "Expected overstays are seed checked_in reservations with check_out < ep. For each: status='overstay', overstay_days=(ep-check_out).days, run freed, one communications row, one audit_log row. One ops_reports 'boarding_overstay_summary' row per batch with all aggregates. Aggregates are recomputed two independent ways (raw-row Python and SQL JOIN/GROUP BY/SUM) and must agree. No other reservations, runs, or communications are modified.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: checked_in with dp(check_out)<ep -> assert status=='overstay' and overstay_days==(ep-check_out).days; boundary row (==ep) must remain 'checked_in'; all other rows unchanged; count 14."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_boarding_reservations", "expect": "Expected checked_in reservations with check_out < ep are status='overstay' with correct overstay_days; all other reservations unchanged" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_boarding_runs", "expect": "Runs for expected overstays are 'available' with current_patient_id cleared; other runs unchanged" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_communications", "expect": "One overstay email per expected overstay with exact subject and (patient_id, reservation_id) keys" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_audit_log", "expect": "One OVERSTAY_FLAGGED entry per expected overstay" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "Exactly one boarding_overstay_summary row per batch with correct aggregates" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_boarding_reservations", "expect": "overstay_count and total_overstay_days agree between raw-row Python and SQL SUM/COUNT; by_run_type/by_location/by_species agree between raw-row Python and SQL GROUP BY" }
     ]
   },
+  "hazards": [
+    "Status filter: at the default episode date 2026-09-30 the snapshot has 5 checked_in reservations (ids 1-5) with check_out strictly before the episode. There are reserved reservations with dates in the past (e.g., id 8 check_out 2026-09-28, id 7 check_out 2026-09-30) and 113 checked_out reservations; a solution that flags any reservation with check_out < ep as overstay over-flags.",
+    "Strict boundary: reservation 7 has check_out exactly 2026-09-30, the default episode date. Because the overstay test is check_out < episode_date (strict), reservation 7 is an active reserved guest, not an overstay.",
+    "Run freeing with future reservations: the runs for overstays (1-5) also have future reserved bookings (99 on run 3, 98 on run 4). The agent must free the run to 'available' but must NOT delete or modify those reserved reservations.",
+    "overstay_days is a whole-day date difference, not a timestamp diff. At default ep, reservation 1 is 21 days overdue and reservations 2/3/4 are 24 days overdue.",
+    "Owner notification must come from the patient record and be sent once per (patient, reservation), not once per owner or once per run.",
+    "Idempotency: a second run must not duplicate communications, audit_log, or ops_reports rows, and overstay_days must be the same."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary boarding overstay policy no-show overstay days",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Kitty Hawk Animal Hospital — Boarding Policies (https://kittyhawkvet.com/clientcenter/online-forms/boarding-policies/)",
+          "Bon Voyage Pet Resort — Cats (overstays/no-shows) (https://www.bonvoyagepetresort.com/cats)",
+          "Thornleigh Veterinary Hospital — Boarding Terms & Conditions (https://thornleighvet.com.au/boarding-terms-conditions/)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Strict-vs-inclusive boundary (checkout on the day itself is not an overstay) \u2014 the classic off-by-one."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary boarding overstay flag owner notification audit log summary task",
+        "top_results": [
+          "Goodstay — Pet Boarding Software for Independent Kennels (https://goodstay.pet/)",
+          "Petcare.software — Kennel Software for UK Boarding Facilities (https://petcare.software/kennel-software/)",
+          "Petcare.software — Vaccination Tracking for Boarding (https://petcare.software/blog/vaccination-tracking-for-kennels/)"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgraded from a simple overstay flag to a full closeout workflow: status + overstay_days, run freeing, owner notification, audit trail, and a multi-dimensional summary. The mission explicitly excludes no-shows and future reserved decoys and verifies every aggregate via independent SQL."
   }
 }

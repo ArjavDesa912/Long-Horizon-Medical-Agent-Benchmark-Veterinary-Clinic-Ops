@@ -1,17 +1,20 @@
-# 081_reminder_template_render — REDTEAM notes
+# 081_reminder_template_render — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Render the seeded 'Vaccination overdue (SMS)' reminder template for every patient with an overdue vaccination (due_date strictly before the episode date) who is NOT already in the queue with a queued vaccination_due row. Substitute {{patient_name}}, {{vaccine_type}}, {{due_date YYYY-MM-DD of the patient's oldest overdue vaccination}}, and {{clinic_phone}} with the phone of the LOCATION the patient belongs to. Push one row per patient: {kind: 'vaccination_due', patient_id, due_date: <oldest overdue due_date>, message: <rendered template>, status: 'queued', queued_by: 'system', queued_at: episode timestamp}.
+Render and queue a two-channel vaccination reminder campaign (SMS for overdue, email for upcoming) using the live `reminder_templates`, the live patient/location/vaccination data, and the existing `reminder_queue` for deduplication.
 
 ## Why this is hard / unique
-Template rendering with a multi-source substitution map (patient + vaccination + location phone); agents hardcode the phone or use the wrong due date.
+- Two live templates with different substitution sets (SMS adds `clinic_phone`).
+- Two non-overlapping patient windows (overdue vs upcoming) plus existing-queue deduplication.
+- Location-specific phone substitution.
+- Exact message rendering verification with patient_id-level matching.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- `reminder_queue` ids 3 and 4 are non-vaccination_due rows (invoice_overdue, boarding_checkin); they must not be modified.
+- `reminder_queue` ids 1 and 2 are already-queued vaccination_due rows for patients 2 and 5.
+- Patients can share names, so matching by `(patient_id, message)` is required.
+- `locations` phones are location-specific; loc 1/2/3 have distinct phone numbers.
+- Date boundary: `due_date < episode_date` is overdue; `episode_date <= due_date <= episode_date + 7` is upcoming.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks before this task ships.

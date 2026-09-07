@@ -1,17 +1,30 @@
-# 013_daily_log_completion — REDTEAM notes
+# REDTEAM — 013_daily_log_completion
 
-## Mission
-Kennel staff finished the evening round. For every reservation currently checked_in, make sure a boarding_daily_log row exists for the episode date with fed_am=true, fed_pm=true, medicated and walked reflecting that reservation's instructions (medicated=true only if medication_instructions is not 'None'; walked=true for all dogs — run_type 'kennel' or 'large_dog' — and false for cattery guests), notes='', and logged_by='Hank Willis'. If a row for that reservation and date already exists, update it to these values instead of creating a duplicate. Seeded log rows for other dates must remain untouched.
+## Status
 
-## Why this is hard / unique
-Upsert (not blind insert) + instruction-conditional booleans through a reservation→run join; duplicate-creating agents fail the uniqueness check.
+Phase 4 hardening is **pending**. This file is a stub written during the v2
+hardmode codegen session; no live attack-fix-attack cycle has been run.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Known red-herring hazards (confirmed from seed snapshot)
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+1. Medication-instruction red herring: four of the five `checked_in`
+   reservations have non-"None" `medication_instructions`, but none of those
+   five patients has an `active = true` record in `medications`.
+2. Species vs. run-type red herring: `patient_id 10` is `species = equine`
+   but is assigned to a `run_type = kennel` run, so `walked` must be true
+   under the run-type rule.
+3. Existing `boarding_daily_log` rows for 2026-09-03/04 must remain
+   byte-identical; the task only creates/updates the episode-date row.
+
+## Phase 4 work remaining
+
+- Run `gold.py` and `gold_alt.py` against a live container.
+- Run the verifier; confirm dual-path SQL/Python totals and canaries.
+- Attempt reward-hacking shortcuts:
+  - mark every log `medicated = true` because instructions exist;
+  - set `walked` from `patients.species` instead of `boarding_runs.run_type`;
+  - upsert by inserting duplicate rows instead of update-by-key;
+  - modify `boarding_reservations` or `boarding_runs` to fake more guests.
+- Harden the verifier against each shortcut and re-run.
+- Measure `max_steps` and `par_steps` from a successful live gold run and
+  update `task.json`.

@@ -1,28 +1,31 @@
 {
   "task_id": "082_inbound_comms_triage",
   "name": "veterinary_clinic_system_082_inbound_comms_triage",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "update",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "update", "aggregation"],
   "surface": "backend",
-  "instruction": "Triage the comms inbox: add field triage='needs_reply' to every communications row with direction 'inbound', and triage='fyi' to every 'outbound' row. No other changes.",
+  "instruction": "Triage the comms inbox and produce a route summary. Update every communications row: add field triage='needs_reply' if direction='inbound', triage='fyi' if direction='outbound'. For inbound rows, add route_to based on the subject (case-insensitive keyword match): 'lab' if the subject contains 'lab'; 'boarding' if it contains 'boarding'; 'billing' if it contains 'billing' or 'quote'; 'front_desk' if it contains 'vaccine', 'vaccines', or 'reminder'; otherwise 'general'. For outbound rows, set route_to='logged'. Then write one ops_reports row per route_to for inbound and one outbound row: {report:'comms_triage', batch_code, scope:'inbound'|'outbound', route_to, count}. The counts must be derived from the live communications after the route_to assignment.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 6,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session; placeholder for hardmode v2",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session; placeholder for hardmode v2",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_communications"
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "All 16 rows have exact triage per direction; all other fields byte-identical; count 16.",
+    "summary": "All communications rows have triage and route_to set correctly. Inbound route counts are exact and match an independent SQL classification. Existing rows are byte-identical except for the two added fields. The ops_reports summary has one row per inbound route plus one outbound row for this batch.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +33,44 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "All 16 rows have exact triage per direction; all other fields byte-identical; count 16."
+        "collection": "veterinary_clinic_system_communications",
+        "expect": "triage and route_to fields set per direction and subject; all other fields unchanged"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_communications",
+        "expect": "route_to counts are also derived via SQL CASE/GROUP BY and agree with the Python computation"
       }
     ]
   },
+  "hazards": [
+    "There are 81 outbound and 79 inbound communications rows (seed_snapshot.json). A keyword-only scan that ignores direction will mis-route outbound rows such as outbound id 34 with subject 'Reminder call — vaccines due' as front_desk instead of fyi/logged.",
+    "The subject 'Discussed dental quote' (18 inbound, 11 outbound) must route to billing because of the 'quote' keyword; an agent that only looks for 'billing' in the subject will misclassify the inbound 'Discussed dental quote' rows as 'general'.",
+    "The subject 'Reminder call — vaccines due' uses 'vaccines' (not 'vaccination') and 'reminder'. A literal 'vaccination' keyword misses the 13 inbound rows and routes them to 'general'.",
+    "Inbound counts per route are: lab 10, boarding 17, billing 39 (21 'Billing question resolved' + 18 'Discussed dental quote'), front_desk 13. The ops_reports summary must be inbound-only; counting all rows by subject would double the counts with the 81 outbound rows.",
+    "The verifier compares the agent's per-route counts against a SQL GROUP BY that classifies subjects with the same keyword rules, so a hardcoded or message-derived count that does not match live data fails."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice communication triage routing front desk lab billing workflow",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Front-desk triage workflows in veterinary practices (aaha.org)",
+          "Client communication routing in vet practice management software",
+          "Automated triage of inbound veterinary messages (veterinarypracticenews.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Whole-collection two-class tagging with byte-identity on untouched fields."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary comms inbox classification keyword route_to summary report benchmark task",
+        "top_results": [
+          "Veterinary client communication automation and routing",
+          "Inbox triage benchmark for service workflows",
+          "Keyword-based message routing in practice management systems"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines a per-row classification/update task with an aggregate summary report, requiring both correct field mutation and exact per-route counts verified by SQL. Outbound rows and keyword nuances ('vaccines' vs 'vaccination', 'quote' as a billing signal) are real decoys."
   }
 }

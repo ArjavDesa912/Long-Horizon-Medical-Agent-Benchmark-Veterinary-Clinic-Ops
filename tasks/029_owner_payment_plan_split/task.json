@@ -1,29 +1,32 @@
 {
   "task_id": "029_owner_payment_plan_split",
   "name": "veterinary_clinic_system_029_owner_payment_plan_split",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "workflow",
+  "category": ["workflow", "create", "aggregation"],
   "surface": "backend",
-  "instruction": "The owner with the single largest unpaid overdue invoice asks to split it into two equal payments. Find that invoice (status 'overdue' or 'sent' past due; if tied on amount, pick the lower invoice number). Then: (1) mark the original invoice status 'split' and add field split_into='<batch_code>-A,<batch_code>-B'; (2) create two new invoices numbered 'INV-S<batch_code>-A' and 'INV-S<batch_code>-B', each with the same owner/patient/location as the original, line_items=[{description: 'Payment plan part A of INV-<original number>' (or part B), quantity: 1, unit_price: <half the original unpaid balance \u2014 round A DOWN to whole cents and give B the remainder so A+B equals the original exactly>}], total_amount equal to that part's unit_price, amount_paid 0, status 'sent', issued_date = episode date, due_date = episode date + 14 days for A and + 28 days for B. The owner's balance stays exactly as it was.",
+  "instruction": "The owner with the single largest unpaid open invoice has asked to split it into two equal payments. Identify the largest unpaid invoice among those with status 'overdue' or 'sent' and a due_date strictly before the episode date. The unpaid amount is (total_amount - amount_paid) in cents. If two open invoices have the same unpaid amount, pick the one with the lower invoice number. Then: (1) Mark the original invoice status='split' and set split_into='<batch_code>-A,<batch_code>-B'. (2) Create two new billing_invoices numbered 'INV-S<batch_code>-A' and 'INV-S<batch_code>-B', each with the same owner_id, patient_id, and location_id as the original, issued_date equal to the episode timestamp, due_date equal to episode + 14 days for A and episode + 28 days for B, status='sent', amount_paid=0, line_items=[{description: 'Payment plan part A of <original invoice_number>' (or 'part B ...'), quantity: 1, unit_price: <that part's total in dollars>}], and total_amount equal to that part's unit_price. Split A gets floor(unpaid/2) cents and split B gets the remainder (unpaid - A), so A+B equals the original unpaid amount exactly. (3) Push one outbound email communications row to the original owner: channel='email', direction='outbound', subject='Payment plan created <batch_code>', body='Invoice <original invoice_number> has been split into INV-S<batch_code>-A ($<A total with 2 decimals>) and INV-S<batch_code>-B ($<B total with 2 decimals>).', logged_by='Billing', occurred_at the episode timestamp, owner_id and patient_id from the original. (4) Push one ops_reports row with report='payment_plan' and the live batch_code containing: episode_date, original_invoice, original_total_cents, split_a, split_b, split_a_cents, split_b_cents, owner_id, due_a (YYYY-MM-DD), due_b (YYYY-MM-DD). The owner's balance must stay exactly as it was in the seed snapshot; do not modify the owners collection. If a payment_plan report or the split invoices for this batch already exist, overwrite/reuse them so the result is idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 50,
-  "par_steps": 14,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
     "veterinary_clinic_system_billing_invoices",
-    "veterinary_clinic_system_owners"
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Identify target from snapshot (max unpaid among overdue or sent-with-due<ep; tie -> lower number). Assert original status 'split' + exact split_into; exactly two new invoices with exact numbers/amounts (A=floor(half), B=remainder; cents exact), dp(due_date) == ep+14 / ep+28; owner balance unchanged (cents vs snapshot); invoice count 28.",
+    "summary": "The agent identifies the single largest open unpaid invoice from live data (status 'overdue' or 'sent' and due_date strictly before the episode date), flips it to 'split' with the correct split_into value, creates exactly two new sent invoices with the correct half-and-remainder amounts and due dates, sends one payment plan communication with exact body formatting, and writes one 'payment_plan' ops_reports row. The original owner's balance is unchanged from the seed snapshot. Every aggregate (target selection, split amounts) is derived two independent ways (raw-row Python and SQL) and must agree. All collections outside the blast radius are byte-identical to the seed snapshot.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,23 +34,55 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Identify target from snapshot (max unpaid among overdue or sent-with-due<ep; tie -> lower number). Assert original status 'split' + exact split_into; exactly two new invoices with exact numbers/amount"
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "Original invoice is status='split' with correct split_into; two new invoices 'INV-S<batch>-A' and 'INV-S<batch>-B' with correct owner/patient/location, issued/due dates, total, amount_paid, and line_items; all other invoices unchanged"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_communications",
+        "expect": "One payment plan communication with exact subject/body/occurred_at and correct owner_id/patient_id"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one 'payment_plan' row for this batch with correct original invoice, split invoice numbers, and cent amounts"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "Target invoice (max unpaid, tie-break lower number) and split amounts (floor/remainder) agree between raw-row Python and SQL"
       }
     ]
   },
+  "hazards": [
+    "The largest open invoice must be selected by unpaid amount (total_amount - amount_paid) in cents, not by total_amount alone. Many paid invoices have a larger total_amount (e.g., INV-1008 at $668.00) but zero unpaid because amount_paid equals total_amount; the draft invoice INV-1003 at $546.00 has a large unpaid but status='draft' and must be excluded.",
+    "The only two 'sent' invoices are INV-1001 (owner 1, $523.00 unpaid, due 2026-08-21) and INV-1002 (owner 2, $214.00 unpaid, due 2026-09-20). Both are past due at all allowed episode dates (2026-09-27..2026-10-03), but INV-1001 is the larger. If they were tied, the lower invoice number would win.",
+    "$523.00 split exactly gives A = $261.50 and B = $261.50. The split must conserve cents exactly: A cents = floor(unpaid_cents / 2), B cents = unpaid_cents - A_cents. The line_item unit_price and total_amount for each split invoice must equal the same half in dollars.",
+    "The new invoices are due at episode + 14 days (A) and episode + 28 days (B), issued at the episode date, and have status 'sent'. A solution that uses the original due dates or the current date fails.",
+    "The original owner's balance must remain unchanged. The verifier compares it to the seed snapshot; a solution that updates the owner balance to the new AR fails.",
+    "On re-run, the original is already split and the two new invoices exist. A naive re-run would select a different open invoice and create a second payment plan. The gold detects an existing payment_plan report and returns idempotently."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "query": "veterinary payment plan split invoice two payments owner",
         "top_results": [
-          "Account for receivables with a written policy - dvm360",
-          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
-          "Effective credit & collection techniques - dvm360"
+          "Veterinary Payment Plans & Pet Care Financing - Splitit",
+          "VetPay | Partner Marketplace",
+          "Pay for Vet Care in 4 with Klarna — $0 Interest | RexVet"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Rounding-down/remainder split arithmetic with exact cent conservation, nonce-derived numbering, and a no-net-balance-change invariant."
+    "uniqueness_searches": [
+      {
+        "query": "invoice payment plan split two installments new invoices task benchmark",
+        "top_results": [
+          "payment-plans?locale=en-GB&testing-method=with-code",
+          "NetSuite Applications Suite - Creating Installments",
+          "Payment plans | Dubsado Help Center"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgrades a single split into a multi-hop selection, cent-conserving installment creation, owner notification, and an ops_reports summary, with dual-path verification of the target selection and split arithmetic."
   }
 }

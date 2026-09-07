@@ -1,19 +1,21 @@
 {
   "task_id": "076_weekly_schedule_load_balance",
   "name": "veterinary_clinic_system_076_weekly_schedule_load_balance",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "aggregation",
+  "category": ["aggregation", "reconciliation", "report"],
   "surface": "backend",
-  "instruction": "Load-balance analysis for the coming week (episode date through episode date + 6 days inclusive). One ops_reports row per provider with role 'veterinarian': {report: 'weekly_load', batch_code, provider_id, provider_name, scheduled_hours: <sum over that vet's scheduled/confirmed appointments in the window of 30-minute slots / 2, as a number>, appointment_count, busiest_day: <the window date with their most appointments as YYYY-MM-DD; tie -> earliest; null if none>}.",
+  "instruction": "Produce the weekly schedule load-balance and capacity report for the 7-day inclusive window starting on the episode date (episode date through episode date + 6 days). Consider only appointments whose status is 'scheduled' or 'confirmed' and whose appointment_date falls in that window. For every provider whose role is 'veterinarian', write an ops_reports row (report='weekly_load') with: provider_id, provider_name, the provider's home location_id, appointment_count, scheduled_hours (each appointment is a 30-minute slot, so count / 2.0), unique_patient_count (distinct patients seen by that vet in the window), and busiest_day (the window date with the most appointments for that vet; ties -> earliest date; null if none). For each of the three clinic locations, write an ops_reports row (report='weekly_load_location') with: location_id, location_name, total_appointment_count (all vet appointments at that location in the window), total_scheduled_hours, unique_vet_count (distinct veterinarians with appointments at that location), unique_patient_count, and busiest_day (most appointments at that location in the window; ties -> earliest; null if none). Write one summary row (report='weekly_load_summary') with: total_vet_appointments, total_vet_scheduled_hours, most_loaded_provider_id (highest scheduled_hours; ties -> smallest provider_id), most_loaded_hours, least_loaded_provider_id (lowest scheduled_hours; ties -> smallest provider_id), least_loaded_hours, and load_balance_ratio (round(most_loaded_hours / least_loaded_hours, 2) when least_loaded_hours > 0, otherwise null). The report is idempotent: delete any prior weekly_load rows for this batch before writing.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 13,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live appointments within [ep, ep+6]; exact numbers; busiest_day with tiebreak (null handling); 4 rows; nonce.",
+    "summary": "8 ops_reports rows (4 weekly_load, 3 weekly_load_location, 1 weekly_load_summary) keyed by batch_code. Every aggregate is recomputed two independent ways (Python over REST rows and SQL GROUP BY) and must agree with the agent's written values. Non-veterinarian providers and non-window/non-scheduled/confirmed appointments are excluded. Canaries on all collections outside ops_reports.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +32,44 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live appointments within [ep, ep+6]; exact numbers; busiest_day with tiebreak (null handling); 4 rows; nonce."
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "8 rows: 4 weekly_load, 3 weekly_load_location, 1 weekly_load_summary with exact computed metrics"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_appointments",
+        "expect": "per-vet and per-location counts/hours/patient counts/busiest_day computed both by raw-row Python and SQL GROUP BY and both must agree with the written rows"
       }
     ]
   },
+  "hazards": [
+    "Non-veterinarian staff: the providers table has 9 rows, but only ids 1-4 have role 'veterinarian'; ids 5-6 are vet_tech, 7-8 are kennel_attendant, and 9 is groomer. Including them would produce 9 weekly_load rows instead of 4 and would add zero-appointment rows for the non-clinical staff.",
+    "Wrong location_id on per-provider rows: a provider's home location_id comes from the providers table, but a veterinarian can see appointments at multiple locations in the same week. For example, provider id=1 (home location_id=1) has appointments at location_id=2 and location_id=3 in the 2026-09-30 window (appointment ids 120, 128, 149, 200, 212). An agent that copies the appointment's location_id into the provider row will misreport the provider's home location.",
+    "Duplicate patients per vet: some patients have more than one appointment with the same veterinarian in the same week (e.g., patient 212 has two appointments with provider 3 in the 2026-09-30 window; patient 204 has two appointments with provider 4). Counting appointments instead of distinct patient_ids overstates unique_patient_count.",
+    "Status and date filtering: the data contains 176 'completed' and 66 'no_show' appointments in other weeks; for the actual episode windows the window only contains 'scheduled' and 'confirmed' appointments, but an agent that does not filter by status and window will include wrong rows.",
+    "Tiebreak rules: busiest_day must use the earliest date when multiple days have the same appointment count; most/least_loaded_provider_id must use the smallest provider_id when scheduled_hours tie."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary clinic weekly provider load balance appointment utilization scheduling",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "5 Steps to Automate Daily Appointment Reports in Vet Clinics 2026 (ustechautomations.com)",
+          "Veterinary Clinic Staff Scheduling Best Practices (xshift.ai)",
+          "Veterinary Staff Scheduling: Optimize Utilization Efficiently (co.vet)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Slot-to-hours conversion, 7-day inclusive window, and per-row argmax with null case \u2014 compound conditions that punish shallow reads."
+    "uniqueness_searches": [
+      {
+        "query": "weekly veterinarian load balance report busiest day tiebreak provider patient count benchmark",
+        "top_results": [
+          "Veterinary Clinic Staff Scheduling Best Practices (xshift.ai)",
+          "How Many Staff Should I Schedule Each Day at My Veterinary Practice (pulserevops.com)",
+          "Optimizing Work Schedules in Veterinary Practice (todaysveterinarynurse.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines per-provider load, per-location capacity, and a practice-level load-balance ratio in one mission. Requires correctly joining appointments to providers, patients, and locations, handling the fact that a vet's home location differs from the locations where their appointments actually occur, and enforcing tiebreak rules. The verifier uses a dual Python/SQL derivation for every aggregate."
   }
 }

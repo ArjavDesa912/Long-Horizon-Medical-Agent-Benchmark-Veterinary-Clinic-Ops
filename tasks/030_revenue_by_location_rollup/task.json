@@ -1,28 +1,31 @@
 {
   "task_id": "030_revenue_by_location_rollup",
   "name": "veterinary_clinic_system_030_revenue_by_location_rollup",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
-  "surface": "frontend",
-  "instruction": "Produce the numbers behind the Revenue by Location report. One ops_reports row per location: {report: 'revenue_by_location', batch_code, location_id, paid_revenue: <sum of amount_paid over that location's PAID invoices, dollars>, open_receivables: <sum of (total_amount - amount_paid) over that location's sent/overdue invoices, dollars>, invoice_count: <all invoices at that location excluding drafts>}. Exactly 3 rows.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation", "report"],
+  "surface": "backend",
+  "instruction": "Run the month-end revenue and accounts-receivable aging report by billing location as of the episode date. For each location, push one ops_reports row with report='revenue_by_location' and the live batch_code, containing: location_id, location_name, paid_revenue (sum of amount_paid on paid, non-draft invoices at that billing location), open_receivables (sum of total_amount - amount_paid on sent or overdue, non-draft invoices at that billing location), invoice_count (all non-draft invoices at that location), ar_aging (dict current/days_1_30/days_31_60/days_61_90/days_90_plus; each bucket is the portion of open_receivables whose invoice due_date falls in that bucket relative to the episode date, with boundaries inclusive at the low end and exclusive at the high end), distinct_patient_count (distinct patient_id values on non-draft invoices at that location), top_delinquent_patient_id, top_delinquent_patient_name, top_delinquent_owner_id, top_delinquent_owner_name, top_delinquent_open_amount (the open invoice with the largest unpaid balance at that location, or nulls when there is no open receivable), and provider_count (providers assigned to that location). The aging buckets must sum exactly to open_receivables. Exclude draft invoices and billing estimates entirely. Use the invoice's billing location for grouping, not the patient's home location. Also append one audit_log row (action='REVENUE_REPORT', actor='system', actor_role='system', target_collection='ops_reports', target_id=batch_code, details containing the batch code, occurred_at=episode timestamp) documenting the report run. If report or audit rows for this batch already exist, overwrite them.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Recompute per location from live invoices; assert 3 rows, cents-exact sums, exact counts, nonce.",
+    "summary": "One ops_reports row per location (report='revenue_by_location') with paid_revenue, open_receivables, invoice_count, ar_aging buckets summing to open_receivables, distinct_patient_count, top delinquent patient/owner, and provider_count, plus one summary row (report='revenue_by_location_summary') with total_paid_revenue, total_open_receivables, total_invoice_count, and location_count. All derived from billing_invoices joined to locations, owners, patients and providers. Draft invoices and billing_estimates are excluded. One audit_log row per batch documenting the run. Dual-path verification (Python filter vs SQL GROUP BY/SUM/CASE) for every aggregate and every aging bucket. All other collections unchanged.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +33,50 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute per location from live invoices; assert 3 rows, cents-exact sums, exact counts, nonce."
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly 3 revenue_by_location detail rows and 1 revenue_by_location_summary row for this batch, all derived fields correct and aging buckets summing to open_receivables"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_audit_log",
+        "expect": "Exactly one new REVENUE_REPORT row for this batch"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "paid_revenue, open_receivables, invoice_count, distinct_patient_count, and every aging bucket agree between a raw-row Python filter and an independent SQL aggregate"
       }
     ]
   },
+  "hazards": [
+    "Draft invoice at location 3 (billing_invoices.id=3, invoice_number=INV-1003, status='draft', total_amount=546) must be excluded from every revenue, open-receivable, invoice-count, and patient-count aggregate; a solution that includes 'unpaid' or 'non-paid' invoices without explicitly dropping drafts inflates location 3's open_receivables by $546.",
+    "The only open invoices are billing_invoices.id=1 (location 1, due 2026-08-21, status 'sent') and id=2 (location 2, due 2026-09-20, status 'sent'); there are no 'overdue' status rows in the seed snapshot. An agent that only treats status='overdue' as open receivable will produce $0 open_receivables and miss both aging buckets.",
+    "Aging is driven by due_date against the episode date (base 2026-09-30, jitter ±3 days), not by status. Invoice 1 is 37-43 days past due and therefore always falls in the days_31_60 bucket; invoice 2 is 7-13 days past due and therefore always in days_1_30. Hardcoding a bucket or using issued_date instead of due_date gives plausible-but-wrong numbers.",
+    "Grouping must use billing_invoices.location_id, not patients.location_id. Patient 2 has home location 1 but appears on a location-2 invoice; an agent that joins through patients.location_id will mis-assign that open receivable and produce a wrong top delinquent for location 2.",
+    "owner.balance is a decoy: owner 1 balance is $134 but open invoice is $523, owner 2 balance is $0 but open invoice is $214. The top delinquent account must be derived from the unpaid invoice, not the owner balance field.",
+    "Items are duplicated across locations (e.g., Buprenorphine at locations 1 and 2); the report must be one row per location, not per item, and the key is location_id."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "query": "veterinary practice accounts receivable aging report by location revenue roll up 2026",
         "top_results": [
-          "Account for receivables with a written policy - dvm360",
-          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
-          "Effective credit & collection techniques - dvm360"
+          "FAQs: Aged accounts receivable and finance charges – IDEXX Neo (https://idexxneosupport.zendesk.com/hc/en-us/articles/360054948334-FAQs-Aged-accounts-receivable-and-finance-charges)",
+          "List of reports in Neo – IDEXX Neo (https://idexxneosupport.zendesk.com/hc/en-us/articles/215244808-List-of-reports-in-Neo)",
+          "Aging & Client Statements Report (https://cvet.my.site.com/pulse/s/article/Aging-Client-Statements-Report)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Mirrors the app's flagship SQL report but must be produced via the plain API; draft exclusion + paid-vs-open split are the traps."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary clinic revenue by location AR aging distinct patients delinquent owner task benchmark",
+        "top_results": [
+          "Veterinary Practice Benchmarking Guide (https://veterinarybusinessguide.com/veterinary-practice-benchmarking-guide/)",
+          "How Veterinary Practice Analytics Improves Client Retention (https://software.covetrus.com/apac/veterinary-insights/article/client-solutions/veterinary-practice-analytics/)",
+          "How profitable is a veterinary clinic? Profit Margin, Owner Salary, Revenue & Valuation | BizMetricsHQ (https://www.bizmetricshq.com/industries/healthcare/veterinary-clinic/)"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses revenue rollup, AR aging, and multi-hop delinquent-account resolution into a single report. Requires strict draft exclusion, sent/overdue open-receivable handling, due-date-driven aging buckets, invoice billing location (not patient home location), and dual-path SQL-vs-Python verification of every aggregate. No off-the-shelf veterinary PMS report task combines all of these constraints with adversarial decoy rows."
   }
 }

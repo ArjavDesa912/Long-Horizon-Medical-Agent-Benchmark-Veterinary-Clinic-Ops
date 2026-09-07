@@ -1,52 +1,67 @@
 {
   "task_id": "069_transfer_chain_consistency",
   "name": "veterinary_clinic_system_069_transfer_chain_consistency",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "repair",
+  "category": ["repair", "reconciliation", "report"],
   "surface": "backend",
-  "instruction": "Transfer records must form a consistent chain with patient locations. For every 'completed' transfer, the patient's CURRENT location must equal the transfer's to_location_id \u2014 unless a LATER transfer (by requested_at) also completed for the same patient, in which case only the latest completed transfer must match. Find violations and fix the TRANSFER rows only: set status 'superseded' for completed transfers that a later completed transfer replaces, and add chain_fixed='<batch_code>' to any transfer whose status you change. Never edit patients here.",
+  "instruction": "The location transfer log must be consistent with current patient locations. For each patient with one or more completed transfers, only the latest completed transfer (ordered by requested_at, then id as tie-breaker) should reflect the patient's current location. Any earlier completed transfer for that patient whose to_location_id does not match the patient's current location_id is a stale record and must be marked status='superseded' and chain_fixed='<batch_code>'. Do not modify patients, pending transfers, or approved transfers - only completed transfer rows.\n\nThen:\n1. Push one ops_reports row per patient with completed transfers report='transfer_chain', batch_code, patient_id, chain_length, superseded_count, current_location_matches (true if the latest completed transfer's to_location_id equals the patient's current location_id).\n2. Push one ops_reports summary row report='transfer_chain_summary', batch_code, total_patients_with_completed, total_superseded, total_pending, total_approved.\n3. For each superseded transfer, push one communications row to the owner: channel='email', direction='outbound', subject 'Transfer record superseded for <patient.name> - <batch_code>', body 'Location transfer <transfer_id> for <patient.name> has been marked superseded because a later completed transfer reflects the patient's current location.', logged_by='system', occurred_at episode, owner_id and patient_id set.\n4. Push one audit_log row: action='TRANSFER_CHAIN_RECONCILED', actor='system', actor_role='system', target_collection='location_transfers', target_id='batch', details='Batch <batch_code> - <N> superseded transfers', occurred_at episode.\n\nAll changes keyed by the live batch code so a re-run reaches the same end state.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 12,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_location_transfers"
+    "veterinary_clinic_system_location_transfers",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Canary patients. Recompute per patient chains from snapshot transfers ordered by requested_at; expected superseded set; assert exact status changes + tags; all other transfers byte-identical; count 6.",
+    "summary": "Completed transfer chains are reconciled: earlier completed transfers with to_location_id != patient current location are status='superseded' with chain_fixed=batch. Latest completed transfers and non-completed transfers are unchanged. ops_reports has one transfer_chain row per patient with completed transfers and one transfer_chain_summary. communications has one row per superseded transfer owner. audit_log has the batch entry.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Canary patients. Recompute per patient chains from snapshot transfers ordered by requested_at; expected superseded set; assert exact status changes + tags; all other transfers byte-identical; count 6."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_location_transfers", "expect": "exact superseded set and unchanged latest/non-completed transfers" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_location_transfers", "expect": "superseded set and chain counts computed two independent ways (Python vs SQL)" }
     ]
   },
+  "hazards": [
+    "Patient 26 (Barnaby, owner 22) has two completed transfers: id 5 (requested 2026-06-06, to_location_id 1) and id 6 (requested 2026-08-20, to_location_id 3). Patient 26's current location_id is 3. The later transfer (id 6) matches; the earlier (id 5) must be superseded. A solution that uses the first completed transfer or does not compare to current location will fail.",
+    "Patient 15 (Truffle) has one completed transfer id 3 (requested 2026-08-05, to_location_id 3) and current location_id 3. No supersede. A solution that marks all completed transfers except the latest as superseded regardless of to_location_id would incorrectly supersede id 3.",
+    "Patients 3, 10, and 30 have pending transfers (ids 1, 2, 7) to locations different from their current locations. Patient 19 has an approved transfer id 4 (to_location_id 2) and current location_id 2. Pending and approved transfers must not be modified; only completed rows are adjusted.",
+    "A solution that 'fixes' the problem by changing the patient's location_id to match the latest transfer, or by changing an approved/pending transfer to completed, would violate the 'fix the transfer rows only' rule.",
+    "The superseded set is determined by requested_at ordering, not by transfer id order. The later completed transfer by date is the authority; id order is only the tie-breaker."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary patient transfer location chain consistency later transfer supersedes earlier",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "specs/001-pet-owner-transfer/spec.md - GitHub",
+          "Dealing with historic Movements in HL7: a whitepaper - Ringholm",
+          "Automating Vet Health Record Transfers Between Clinics - Puppilot"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Temporal chain reasoning (latest-wins) with fix-the-log-not-the-patient inversion; requires modeling the chain, not pattern-matching one row."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary clinic location transfer superseded benchmark repair",
+        "top_results": [
+          "The positive gain spiral of job resources, work engagement, opportunity and motivation on training transfer",
+          "National Health Act: National environmental health norms and standards",
+          "European Network for integrating novel technologies for food processing - Wageningen"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines temporal chain reasoning (latest completed transfer wins) with per-patient and summary ops_reports, owner communications, and audit log, plus dual-path verification of the superseded set, while strictly not modifying patients or non-completed transfers."
   }
 }

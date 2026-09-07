@@ -1,28 +1,32 @@
 {
   "task_id": "033_cs_log_gap_detection",
   "name": "veterinary_clinic_system_033_cs_log_gap_detection",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "repair",
-  "surface": "websearch",
-  "instruction": "Audit the controlled-substance log for DEA witness-compliance gaps: every row with action 'administer' or 'waste' must have a real witnessed_by value (not null, not '', not '\u2014'), because administration and waste require a witness while receive and dispense do not (verify the convention if needed). Fix violations minimally: set witnessed_by to 'Dr. Alvarez' and add field witness_corrected='<batch_code>'. Rows already compliant and all receive/dispense rows must remain byte-identical to seed.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["repair", "reconciliation", "report"],
+  "surface": "backend",
+  "instruction": "Audit the controlled_substance_log for DEA witness compliance and fix only the real violations. A valid witness for an 'administer' or 'waste' entry must be a non-empty value, and the witness must be a veterinarian or vet_tech assigned to the same location as the log row. For each violation, set witnessed_by to the first veterinarian at that location sorted by provider id (or the first vet_tech at that location if there is no veterinarian), set witness_corrected to the live batch_code, and append an audit_log row (action='CS_WITNESS_CORRECTED', target_collection='controlled_substance_log', target_id the log row id, details containing the batch code and the assigned witness, occurred_at=episode timestamp). Receive and dispense rows do not require a witness and must remain untouched, even if their witnessed_by is the em-dash placeholder. Push one ops_reports summary row (report='cs_witness_audit', batch_code) with corrected_count and a corrections list containing one entry per fixed row (log_row_id, item_name, location_id, patient_id, patient_name, assigned_witness). If ops_reports or audit_log rows for this batch already exist, overwrite them. On re-run, rows already carrying witness_corrected for this batch must not be re-corrected.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_controlled_substance_log"
+    "veterinary_clinic_system_controlled_substance_log",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: rows with action in {administer, waste} and witnessed_by in (null,'','\u2014') -> assert witnessed_by=='Dr. Alvarez' and witness_corrected==nonce; assert all other rows byte-identical; count 12.",
+    "summary": "All controlled_substance_log rows with action in ('administer','waste') and an empty or em-dash witnessed_by are corrected with a location-appropriate provider and witness_corrected=batch. No other log rows are modified. One ops_reports summary and one audit_log row per correction are created for the batch. Seed log rows, including dispense/receive rows with em-dash placeholders, survive byte-identical.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +34,55 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: rows with action in {administer, waste} and witnessed_by in (null,'','\u2014') -> assert witnessed_by=='Dr. Alvarez' and witness_corrected==nonce; assert all other rows byte-identical; count"
+        "collection": "veterinary_clinic_system_controlled_substance_log",
+        "expect": "Violation rows corrected; all other rows byte-identical"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_audit_log",
+        "expect": "One CS_WITNESS_CORRECTED row per violation for this batch"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "One cs_witness_audit summary row for this batch"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_controlled_substance_log",
+        "expect": "Violation list and corrected witness names agree between raw-row Python and an independent SQL query joined to providers"
       }
     ]
   },
+  "hazards": [
+    "Empty/em-dash witness: only one log row qualifies for correction in the seed snapshot — controlled_substance_log.id=11 (Tramadol waste at location 2, witnessed_by=''). The dispense and receive rows use the em-dash (U+2014) placeholder and must not be touched.",
+    "Location-specific witness: the corrected witness for a log row must be a veterinarian or vet_tech at the same location. For the violation at location 2, the first veterinarian by provider id is Dr. Priya Natarajan. Hardcoding 'Dr. Alvarez' fails the location rule.",
+    "Role and provider validation: the assigned witness must come from providers with role 'veterinarian' or 'vet_tech'. Staff such as kennel attendants or groomers are not valid witnesses.",
+    "Idempotency: on re-run the corrected row already has witness_corrected equal to the batch code and a real witness. It must not be re-corrected, and the audit/ops rows must be rewritten (not duplicated).",
+    "Receive/dispense exemption: rows with action 'receive' or 'dispense' do not require a witness. An agent that 'fixes' the em-dash values on those rows changes the seed and fails the canary check.",
+    "Patient-name inclusion: the ops_reports corrections list must include the patient name resolved from patients, not the patient_id alone."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "query": "veterinary DEA log missing witness correction audit trail task",
         "top_results": [
-          "DEA compliance - AAHA",
-          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
-          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+          "DEA Controlled-Substance Logs and Inventory Reconciliation: Biennial Counts, Discrepancy Investigations, Audit Readiness (https://veterinarybusinessguide.com/dea-controlled-substance-logs-and-inventory-reconciliation/)",
+          "A Matter of Record | Today's Veterinary Business (https://todaysveterinarybusiness.com/a-matter-of-record/)",
+          "Fixing Controlled Drug Problems (https://www.isvma.org/wp-content/uploads/2023/02/Fixing_Controlled_Drug_Problems.pdf)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Rule-conditioned repair where the compliant set is defined by domain knowledge (receive/dispense exempt); over-fixing compliant rows fails byte-identity."
+    "uniqueness_searches": [
+      {
+        "query": "controlled substance log witness audit correction veterinary task benchmark",
+        "top_results": [
+          "DEA Controlled-Substance Logs and Inventory Reconciliation: Biennial Counts, Discrepancy Investigations, Audit Readiness (https://veterinarybusinessguide.com/dea-controlled-substance-logs-and-inventory-reconciliation/)",
+          "A Matter of Record | Today's Veterinary Business (https://todaysveterinarybusiness.com/a-matter-of-record/)",
+          "DEA Inspection Checklist for Veterinary Practices 2026 | BayArea Compliance (https://bayareacompliance.com/resources/dea-inspection-checklist-veterinary)"
+        ]
+      }
+    ],
+    "differentiation_note": "Goes beyond a simple 'set missing witness to Dr. Alvarez' rule by requiring location-specific, role-validated witness assignment, a multi-collection audit trail, and an ops_reports summary with resolved patient names. Distinguishes empty witnesses from the legitimate em-dash placeholders used on receive/dispense rows."
   }
 }

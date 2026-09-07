@@ -1,28 +1,32 @@
 {
   "task_id": "009_rabies_certificate_doc_check",
   "name": "veterinary_clinic_system_009_rabies_certificate_doc_check",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "repair",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["repair", "create", "aggregation"],
   "surface": "backend",
-  "instruction": "State rule of thumb: every dog with a current (not overdue) rabies vaccination should have a rabies certificate on file. In the files collection, add field doc_status to every files row with doc_type='rabies-certificate': 'current' if that file's patient has a rabies vaccination with due_date on or after the episode date, else 'stale'. Then, for each canine patient whose rabies is current but who has NO rabies-certificate file row, push one placeholder row: {bucket: 'vet-documents', path: '<patient_id>/rabies-certificate/pending-<batch_code>.pdf', patient_id, doc_type: 'rabies-certificate', filename: 'pending-<batch_code>.pdf', content_type: 'application/pdf', size_bytes: 0, uploaded_by: 'system', uploaded_at: <episode timestamp>, doc_status: 'current'}. Do not modify other files rows beyond the doc_status addition, and do not touch non-certificate rows at all.",
+  "instruction": "Run the rabies-certificate document audit for the practice as of the episode date. In this jurisdiction, rabies certificates are required for dogs and cats only. (1) For every files row with doc_type='rabies-certificate', set doc_status to 'current' if that patient is a canine or feline whose latest rabies vaccination due_date is on or after the episode date; otherwise set it to 'stale'. Do not change any other field on those rows and do not touch non-rabies file rows. (2) For every canine or feline patient that has a current (not overdue) rabies vaccination and still has no rabies-certificate file row after step 1, push a placeholder certificate: bucket='vet-documents', path='{patient_id}/rabies-certificate/pending-{batch_code}.pdf', patient_id, doc_type='rabies-certificate', filename='pending-{batch_code}.pdf', content_type='application/pdf', size_bytes=0, uploaded_by='system', uploaded_at the episode timestamp, doc_status='current'. (3) For each dog or cat that receives a placeholder, send one outbound email communication to the owner: channel='email', direction='outbound', subject='Rabies certificate missing — {batch_code}', body='{PatientName} (patient {patient_id}) is missing a current rabies certificate as of {episode date YYYY-MM-DD}.', logged_by='system', occurred_at the episode timestamp, owner_id and patient_id set. (4) Push exactly one ops_reports row with report='rabies_certificate_audit' and the live batch_code, containing the computed aggregates and a by_location breakdown: total_rabies_dogs_cats, current_rabies, stale_rabies, current_with_certificate, current_missing_certificate, stale_with_certificate, placeholders_created, communications_sent, and by_location (per location: total, current, stale, with_cert, missing, stale_cert). If an ops_reports row for this report and batch_code already exists, overwrite it. The flow is idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_files"
+    "veterinary_clinic_system_files",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Compute current-rabies canines (latest rabies due>=ep). Seeded certificate rows: exactly 1 (patient 1) per snapshot \u2014 assert doc_status set correctly on it. Expected placeholders = current-rabies canines minus those with a cert row. Assert exactly that many new rows with exact fields (path/filename embed live batch_code); assert all other files rows byte-identical to snapshot; total = 8 + placeholders.",
+    "summary": "Episode date from ops_meta. Existing rabies-certificate file rows get doc_status 'current' or 'stale' based on the patient's latest rabies due_date vs episode, with all non-doc_status fields unchanged. One placeholder file is pushed for every current-rabies canine/feline that has no certificate, with path/filename embedding the live batch_code and exact remaining fields. One outbound email is pushed per placeholder, keyed by patient_id because owner names/pet names can collide. Exactly one ops_reports row (report='rabies_certificate_audit', batch_code) holds the counts and by_location breakdown, with all aggregates verified via dual raw-row and SQL paths. All collections outside the blast radius are byte-identical to the seed snapshot.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,31 +34,54 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Compute current-rabies canines (latest rabies due>=ep). Seeded certificate rows: exactly 1 (patient 1) per snapshot \u2014 assert doc_status set correctly on it. Expected placeholders = current-rabies cani"
+        "collection": "veterinary_clinic_system_files",
+        "expect": "Every existing rabies-certificate row has correct doc_status; all non-certificate rows unchanged; exactly one placeholder per current-rabies canine/feline without a certificate"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_communications",
+        "expect": "Exactly one new outbound email per placeholder recipient, matched by patient_id and subject containing the batch_code"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one row with report='rabies_certificate_audit' and the batch_code, all aggregate and per-location numbers correct"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_vaccinations",
+        "expect": "Every aggregate count in ops_reports agrees between a raw-row Python filter over live data and an independent SQL GROUP BY/COUNT query"
       }
     ]
   },
+  "hazards": [
+    "Non-required species with current rabies: the seed snapshot has 127 dogs and cats with a rabies record (103 current, 24 stale as of 2026-09-30), plus 5 avians, 4 equines, and 7 exotics with current rabies. Only canines and felines are in scope; species outside those two must not receive placeholder files or communications.",
+    "Existing non-rabies files: the seed files collection contains 7 non-rabies rows (radiograph, clinical photo, boarding-consent, anesthesia-consent, referral-letter). An over-broad 'add doc_status to every file' or 'touch every files row' mutation changes these and fails the canary check.",
+    "Multi-pet owner name collision: the 50-name pet pool and 103 current-rabies dogs/cats mean two different pets of the same owner can share the same name. The verifier matches placeholder and communication rows by patient_id, not by pet name or owner name.",
+    "Date boundary around the episode: three current-rabies dogs/cats have due_dates in the jitter-sensitive band [2026-09-27, 2026-10-03] (patient 121/2026-09-30, 208/2026-09-30, 288/2026-10-01). The 'current' test must use '>=' vs episode date; at jitter +3 (ep 2026-10-03) one fewer current patient qualifies than at the base date.",
+    "Idempotency on re-run: a second run must see the placeholders and communications it already created and skip them, update the same existing cert doc_status, overwrite (not duplicate) the ops_reports row, and leave the final state byte-identical to the first run."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "AAHA canine feline rabies vaccination certificate document veterinary practice 2026",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "Rabies Vaccination Certificates (AAHA / Boehringer Ingelheim, 2022)",
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org)",
+          "Key Vaccination: Rabies - AAHA (aaha.org)"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "rabies certificate on file document audit \"doc_status\" veterinary clinic workflow",
+        "query": "veterinary clinic automated audit missing rabies certificate placeholder document task",
         "top_results": [
-          "docassist database schema with doc_status enum (GitHub)",
-          "Document Metadata model for OpenMRS over FHIR - OpenMRS Talk"
+          "Why Vet Clinics Keep Chasing Client Documents in 2026 (ustechautomations.com)",
+          "Veterinary Compliance Checklist: Expired Rabies Vaccinations (mica.mindlink.tools)",
+          "Generating Rabies, Vaccine, and Reminder Certificates (DaySmart Vet)"
         ]
       }
     ],
-    "differentiation_note": "Two-way reconciliation (annotate existing + synthesize missing) driven by a join across three collections; placeholder naming embeds the live nonce."
+    "differentiation_note": "Upgrades a single-collection doc_status update into a cross-collection audit and owner-notification workflow: it reconciles files against vaccinations and species rules, synthesizes placeholder documents for missing certificates, sends per-patient owner notices, and produces a dual-path verified aggregate report with location breakdown."
   }
 }

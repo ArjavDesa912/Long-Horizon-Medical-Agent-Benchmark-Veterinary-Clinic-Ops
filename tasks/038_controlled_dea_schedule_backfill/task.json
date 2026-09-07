@@ -1,52 +1,68 @@
 {
   "task_id": "038_controlled_dea_schedule_backfill",
   "name": "veterinary_clinic_system_038_controlled_dea_schedule_backfill",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "repair",
-  "surface": "websearch",
-  "instruction": "Regulatory backfill: every medication with is_controlled_substance=true must carry the correct DEA schedule in dea_schedule. Any controlled row missing dea_schedule must be fixed using the schedule that the OTHER rows for the same drug_name already use (the clinic's existing classifications are authoritative). If no other row for that drug exists, look up the drug's current DEA schedule online. Non-controlled rows must not gain a dea_schedule. Add field schedule_fixed='<batch_code>' to each row you change.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["repair", "aggregation", "idempotency"],
+  "surface": "backend",
+  "instruction": "Run the DEA schedule backfill and controlled-medication compliance sweep, batched under the episode batch code (ops_meta.batch_code). (1) Repair: every medications row with is_controlled_substance=true must carry a dea_schedule. Any controlled row whose dea_schedule is missing or empty must be filled with the schedule that the OTHER controlled rows for the same drug_name already use — the clinic's existing classifications are authoritative, so derive the modal schedule from sibling rows sharing the drug_name (in this dataset every controlled drug_name has scheduled siblings; if a controlled drug_name ever had none, fall back to that drug's published DEA schedule). Set schedule_fixed = the episode batch_code on each row you actually change. Do not modify any row that already had a schedule, and do not modify any non-controlled row. (2) Report: push one ops_reports row per controlled drug_name with report='dea_backfill', batch_code, drug_name, controlled_count = the number of medications rows with is_controlled_substance=true for that drug_name, dea_schedule = the schedule now in effect for that drug (it must be uniform across that drug's controlled rows), and rows_fixed = the number of that drug's controlled rows that were missing a schedule before this pass. Then push one ops_reports summary row with report='dea_backfill_summary', batch_code, controlled_count = total controlled medications rows, controlled_drugs = number of distinct controlled drug_names, rows_fixed = total rows you changed. (3) Audit: append one audit_log row: actor='system', actor_role='system', action='DEA_SCHEDULE_BACKFILL', target_collection='medications', target_id='bulk', batch_code, details='DEA backfill <batch_code>: <F> controlled medication row(s) fixed across <D> controlled drugs', occurred_at = the episode timestamp. No other collection may change; pharmacy_inventory is a different system of record and is NOT the target of this backfill.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps must be measured from a real gold.py run against a live container in the QC session (RL_ENV_HARDMODE_CODEGEN_PROMPT); intentionally null here — do not guess a round number.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_medications"
+    "veterinary_clinic_system_medications",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "From snapshot: controlled rows with missing/empty dea_schedule -> expected schedule = modal schedule among snapshot rows with same drug_name (fallback: known map Buprenorphine V, Tramadol IV, Ketamine III, Alprazolam IV). Assert exact fix + tag; all other rows byte-identical; count 20.",
+    "summary": "In the seed, exactly one controlled medications row is missing dea_schedule (id 2, drug_name 'Alprazolam'); its expected value is the modal schedule among the other controlled Alprazolam rows ('IV'). Every seeded-missing row must now carry that schedule plus schedule_fixed == batch_code; all other 199 rows byte-identical (including the 49 already-scheduled controlled rows, which must NOT gain schedule_fixed). Post-fix, no controlled row may have a null/empty dea_schedule and each drug's schedule must be uniform. ops_reports holds exactly one dea_backfill row per controlled drug_name plus one dea_backfill_summary row; controlled_count and modal schedule are each recomputed two independent ways (raw-row Python vs SQL GROUP BY) which must agree. audit_log gains exactly one DEA_SCHEDULE_BACKFILL row. All seeded collections outside the blast radius are canary-checked byte-identical.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: controlled rows with missing/empty dea_schedule -> expected schedule = modal schedule among snapshot rows with same drug_name (fallback: known map Buprenorphine V, Tramadol IV, Ketamine"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_medications", "expect": "seeded-missing controlled rows fixed with modal schedule + batch tag; all other rows byte-identical; zero controlled rows left with null/empty dea_schedule" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_medications", "expect": "controlled_count and modal dea_schedule per drug_name agree between a raw-row Python pass and an independent SQL GROUP BY" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "exactly len(controlled drug_names) dea_backfill rows + one dea_backfill_summary row for batch_code; every field asserted" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_audit_log", "expect": "seed count + 1; new DEA_SCHEDULE_BACKFILL row exact incl. batch_code" }
     ]
   },
+  "hazards": [
+    "Among 200 medications rows, exactly 50 have is_controlled_substance=true and exactly ONE of them is missing dea_schedule: id 2 (drug_name 'Alprazolam', patient_id '1'). An agent that bulk-updates all controlled rows, or that fixes rows that already had a schedule (they must not gain schedule_fixed), fails the row-level checks.",
+    "The modal schedule for Alprazolam must be derived from siblings: 13 of the 14 controlled Alprazolam rows carry 'IV' — an agent that guesses a schedule, or that hardcodes a schedule for a different drug (e.g. Buprenorphine 'V'), fails. Verified: snapshot shows Alprazolam controlled rows = {MISSING:1, IV:13}, Buprenorphine {V:12}, Tramadol {IV:15}, Ketamine {III:9}.",
+    "pharmacy_inventory is a decoy system of record: it ALSO carries dea_schedule values on controlled SKUs (ids 35-42: V, IV, III, IV). An agent that reads or — worse — updates the inventory table's schedule fields instead of medications fails the canary on pharmacy_inventory.",
+    "The 150 non-controlled medications rows (Carprofen, Apoquel, Amoxicillin-clavulanate, Metronidazole, Gabapentin, Flea topical) have dea_schedule=null and is_controlled_substance=false — none may gain a dea_schedule or a schedule_fixed tag; the verifier byte-compares every one.",
+    "Seeded dea_schedule values are bare Roman numerals ('III', 'IV', 'V' — see snapshot rows 26, 30, 35-42 in pharmacy_inventory and all scheduled medications rows). An agent that writes '4', 'CIV', 'Schedule IV', or 'IV (C-IV)' fails the exact-equality check — the modal sibling value must be copied verbatim, not reformatted.",
+    "audit_log seed row id 3 is action='CS_LOG_APPENDED' with target_collection='controlled_substance_log' — a controlled-substance-looking decoy that must not be edited; the run must append exactly one new DEA_SCHEDULE_BACKFILL row, and a rerun must not append a second. ops_reports is likewise absent from the seed snapshot (not one of the 24 seeded collections) — the agent must create it blind."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "query": "DEA controlled substance schedules veterinary drugs buprenorphine tramadol ketamine alprazolam schedule III IV V recordkeeping",
         "top_results": [
-          "DEA compliance - AAHA",
-          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
-          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+          "DEA Diversion Control Division drug scheduling (dea.gov)",
+          "21 CFR 1308 schedules of controlled substances (eCFR)",
+          "DEA compliance - AAHA"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Self-referential repair (derive the fix from sibling rows) with a web-knowledge fallback branch; tagging only changed rows."
+    "uniqueness_searches": [
+      {
+        "query": "self-referential missing-field backfill modal sibling value plus compliance report audit append benchmark task",
+        "top_results": [
+          "Data quality / record repair tooling comparisons",
+          "DEA veterinary recordkeeping guides",
+          "No public benchmark task found combining sibling-derived backfill + per-drug compliance report + audit append"
+        ]
+      }
+    ],
+    "differentiation_note": "v1's one-row repair is widened into repair + verification + reporting: the single missing schedule (seed id 2) must be derived from 13 sibling Alprazolam rows (modal 'IV'), the 49 already-scheduled controlled rows must remain byte-identical without a tag, and the run must emit a per-drug compliance report plus a summary plus an audit entry — with controlled_count and modal schedule dual-path verified. The 10x medication volume (200 rows, 50 controlled) makes eyeballing the missing row impractical."
   }
 }

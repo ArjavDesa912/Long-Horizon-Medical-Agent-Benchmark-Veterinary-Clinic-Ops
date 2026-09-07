@@ -1,19 +1,21 @@
 {
   "task_id": "077_data_freshness_report",
   "name": "veterinary_clinic_system_077_data_freshness_report",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation", "report"],
   "surface": "backend",
-  "instruction": "How stale is each collection? One ops_reports row {report: 'data_freshness', batch_code, oldest_collection: '<short name (without prefix) of the collection whose newest updated_at is oldest>', newest_collection: '<short name whose newest updated_at is newest>', checked: <number of collections checked>}. Consider all 24 seeded collections (exclude ops_meta and ops_reports).",
+  "instruction": "The board wants a full data-freshness ranking of every seeded business collection. For each of the 24 business collections present at image build time (exclude the runtime nonce table and the report table you will write), determine the newest updated_at timestamp from live data and rank the collections by freshness: freshness_rank = 1 for the oldest, 24 for the newest. Ties (if any) should be broken by collection name in ascending order. Write one ops_reports row per collection with report='data_freshness', batch_code, collection, newest_updated_at, and freshness_rank. Also write a summary row with report='data_freshness_summary', batch_code, oldest_collection, newest_collection, checked, and total_collections. Use the full updated_at timestamp, not just the date prefix: all collections were last updated on 2026-09-04 within seconds of each other, so a date-only comparison would make every collection appear equally fresh and the rank would be undefined. The verifier recomputes newest_updated_at both via raw-row Python and SQL MAX(updated_at) and asserts the two agree with each other and with the written rows.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute max(updated_at) per collection from live data; assert exact names and checked==24; nonce.",
+    "summary": "24 data_freshness rows plus 1 data_freshness_summary row, all keyed by batch_code. newest_updated_at for each collection must agree between raw-row max and SQL MAX(updated_at). freshness_rank, oldest_collection, newest_collection, and checked/total_collections must be exactly the re-derived rank. All business collections outside ops_reports are canary-checked.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +32,43 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute max(updated_at) per collection from live data; assert exact names and checked==24; nonce."
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "25 rows: 24 data_freshness + 1 data_freshness_summary with exact newest_updated_at, ranks, and summary fields"
+      },
+      {
+        "type": "dual_path",
+        "collection": "all 24 business collections",
+        "expect": "MAX(updated_at) computed via Python max over fetch_all rows and via SQL MAX(updated_at); both must agree with the written newest_updated_at"
       }
     ]
   },
+  "hazards": [
+    "Date-prefix trap: every business collection's MAX(updated_at) is on 2026-09-04, but the exact timestamps differ by seconds. Using only the first 10 characters would make every collection appear equally fresh and the freshness_rank/oldest/newest values undefined. The snapshot shows locations updated_at=2026-09-04T21:08:33.368278+00:00 (oldest) and audit_log updated_at=2026-09-04T21:08:41.394800+00:00 (newest).",
+    "Runtime tables: the live /v1/tables response includes the per-episode nonce table (ops_meta) and, after the first write, the report table (ops_reports). Neither is in the host-side seed_snapshot.json, which contains exactly 24 business collections. Including either would produce >24 rows and a wrong checked count.",
+    "created_at vs updated_at: every row has both fields, but the freshness audit must use updated_at. Using created_at would be a different (and incorrect) ranking because the instruction specifies the most recent modification time.",
+    "SQL table name: the SQL query must use the full veterinary_clinic_system_* table name (e.g., veterinary_clinic_system_vaccinations), not the short REST collection slug."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "database data freshness audit updated_at timestamp SLA veterinary practice",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "AnomalyArmor data freshness monitoring (docs.anomalyarmor.ai)",
+          "VetSalud Database - PostgreSQL veterinary clinic, audit trails, timestamps (github.com/raulajaimes/vet-salud-database)",
+          "OpenVPM - full REST API, audit logging, veterinary PIMS (github.com/kingandoakintelligence-tech/openvpm)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Meta-aggregation across ALL collections (24 queries); agents check only the collections they already know."
+    "uniqueness_searches": [
+      {
+        "query": "database freshness rank report newest updated_at per collection benchmark task",
+        "top_results": [
+          "second-brain freshness.py - per-source last-update ranking (github.com/oracle-devrel/oracle-ai-developer-hub)",
+          "MongoDB versioning documents with timestamps (theneuralbase.com)",
+          "ragfresh - stale/drifted/ghost document detection (pypi.org/project/ragfresh)"
+        ]
+      }
+    ],
+    "differentiation_note": "A full-collection freshness ranking that requires sub-second timestamp ordering across all 24 tables. The agent cannot rely on a single 'oldest/newest' comparison; it must assign a rank to every collection and derive the summary from those ranks. The dual Python/SQL path prevents a hardcoded or snapshot-copied answer from passing."
   }
 }

@@ -1,52 +1,65 @@
 {
   "task_id": "055_amendment_chain_repair",
   "name": "veterinary_clinic_system_055_amendment_chain_repair",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "repair",
-  "surface": "frontend",
-  "instruction": "The immutability rule says locked notes are amended by appending a NEW linked record, never edited. Someone edited locked notes in place: any visit_records row with locked_at set whose updated_at is LATER than its locked_at was tampered with. For each tampered row: leave the row itself alone, but append a correction record {patient_id, provider_id, location_id copied, visit_date = episode date, subjective: 'Amendment of <dp(visit_date)> note: record was modified after locking; content under review.', objective: '', assessment: 'Amendment pending clinical review.', plan: 'Original note quarantined for compliance.', weight_kg copied from the tampered row, problems: [], locked_at: null, amends: <tampered row id as string>, batch: '<batch_code>'}. If no tampered rows exist, do nothing.",
+  "category": ["repair", "workflow", "aggregation"],
+  "surface": "backend",
+  "instruction": "The clinic's medical-record policy treats locked visit notes as immutable: after a note is locked, any change must be made by appending a new linked amendment record, never by editing the original. As of the episode date, you must identify every visit record that has been tampered with and repair its chain. A tampered record is a locked visit_records row (locked_at is non-null) whose updated_at timestamp is later than its locked_at timestamp — this is the only signal; the audit_log does not contain separate edit events for these notes. For each tampered original: leave the original untouched; append a new visit_records amendment row with the same patient_id, provider_id, location_id, and weight_kg; visit_date set to the episode date; subjective 'Amendment of <YYYY-MM-DD of original visit_date> note: record was modified after locking; content under review.'; objective 'Original weight: <weight_kg> kg.'; assessment 'Amendment pending clinical review.'; plan 'Original note quarantined for compliance.'; problems []; locked_at null; amends set to the original's id as a string; and batch set to the episode batch_code. Do not create a duplicate amendment for the same original id in the same episode (re-runs must be idempotent). Also write one ops_reports row report='amendment_chain' for this batch with tampered_count, amendment_count, unlocked_count, and location_breakdown (an object mapping each location_id to the number of tampered notes at that location). If an amendment_chain report already exists for this batch, overwrite it so the report stays current. Nothing outside visit_records and ops_reports may be changed.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 13,
+  "max_steps": null,
+  "_max_steps_note": "Measure via live gold run in QC session; do not guess.",
+  "par_steps": null,
+  "_par_steps_note": "Measure via live gold run in QC session; do not guess.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_visit_records"
+    "veterinary_clinic_system_visit_records",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: rows with locked_at and updated_at > locked_at (string compare of ISO timestamps). Assert one new amendment row per tampered row with exact fields incl. amends link + nonce; originals byte-identical (including tampered ones \u2014 they must NOT be edited); count 36+K.",
+    "summary": "From seed: 344 visit_records rows have locked_at set and updated_at > locked_at (string compare). They each get exactly one new visit_records amendment with amends=<original id> and batch=<batch>. 27 original rows have locked_at null and must not be amended. The original 371 seed rows must remain byte-identical. Exactly one ops_reports row report='amendment_chain' for this batch with tampered_count=344, amendment_count=344, unlocked_count=27, and location_breakdown={'1':116,'2':112,'3':116}. Dual-path counts (Python vs SQL) must agree.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: rows with locked_at and updated_at > locked_at (string compare of ISO timestamps). Assert one new amendment row per tampered row with exact fields incl. amends link + nonce; originals b"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "visit_records", "expect": "exactly 344 new amendment rows keyed by (amends, batch); originals unchanged" },
+      { "type": "dual_path", "collection": "visit_records", "expect": "tampered count and per-location counts recomputed independently via SQL and Python; both agree with the amendment rows and the ops_reports summary" }
     ]
   },
+  "hazards": [
+    "visit_records id=371 has locked_at=null and an empty plan; it is an incomplete note but not a tampered locked note. A solution that conflates 'incomplete' with 'tampered' and appends an amendment for it over-produces and fails the seed row count and field checks.",
+    "visit_records id=27, 57, 86, 90, 114 are also unlocked (locked_at null) and must not receive an amendment. Over-broad 'append for all visit records' or 'append for all records without a problems list' would fail the new-row count.",
+    "The audit_log (4 rows: TRANSFER_COMPLETED target patients, OWNER_MERGE, CS_LOG_APPENDED, ESTIMATE_CONVERTED) contains no visit_records edit events, so a solution that tries to derive the tampered set from audit_log will find nothing and miss all 344 tampered rows.",
+    "The timestamp comparison must be a string compare of ISO 8601 values (updated_at > locked_at), not datetime parsing or simple locked_at presence; in this seed all 344 locked rows are tampered, but a solution that ignores updated_at entirely cannot survive a seed where a record was locked and never edited.",
+    "Original seed rows must remain byte-identical. A solution that edits an original to set amends or clear locked_at is a direct violation of the immutability rule and fails the seed canary check."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "veterinary medical records amendment locked note tamper audit chain compliance",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "AAHA Recordkeeping Guidelines for Veterinary Practices",
+          "Medical Record Amendments and Corrections Best Practices (healthit.gov)",
+          "Veterinary Practice Record Locking and Amendment Workflows (veterinarypracticejournal.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Forensic detection (updated_at vs locked_at) + append-only correction protocol \u2014 the opposite instinct (editing the note) fails."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary clinic locked visit note tamper detection append amendment chain benchmark task",
+        "top_results": [
+          "Veterinary EMR Data Integrity and Audit Patterns (vetstoria.com)",
+          "Long-horizon agent benchmark veterinary clinic amendment chain",
+          "Open-source veterinary PIMS record locking examples"
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 expands the v1 single-append rule into a chain-repair workflow with a grouped ops_reports summary and dual-path (SQL vs Python) forensic counting. It adds an explicit audit_log-canary hazard and an incomplete-note decoy (visit_records id=371) to distinguish tampering from documentation incompleteness."
   }
 }

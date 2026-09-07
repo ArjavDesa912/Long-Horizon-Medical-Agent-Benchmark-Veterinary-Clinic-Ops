@@ -1,53 +1,67 @@
 {
   "task_id": "054_weight_trend_alert",
   "name": "veterinary_clinic_system_054_weight_trend_alert",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "aggregation",
+  "category": ["aggregation", "workflow", "reconciliation", "idempotency"],
   "surface": "websearch",
-  "instruction": "Flag unhealthy weight trends. For every patient with at least 2 visit_records, compare weight_kg at the most recent visit vs the earliest recorded visit: a gain or loss of more than 10% (strictly) is clinically significant (verify the rule of thumb if unsure). For each flagged patient: (1) add the alert string 'Weight change >10% \u2014 review diet plan' to the patient's alerts array (append; preserve existing alerts; skip patients already carrying this exact alert); (2) push one ops_reports row {report: 'weight_alert', batch_code, patient_id, name, first_weight, latest_weight, change_pct: <round(100*(latest-first)/first, 1)>, direction: 'gain' or 'loss'}. Patients with fewer than 2 visits are ignored.",
+  "instruction": "Screen the patient panel for significant weight drift under this episode's batch code (read batch_code and episode_date from the ops_meta row with meta_key='episode_state'). For every patient with at least two visit_records, order that patient's visits by (visit_date, created_at, id) ascending and compare weight_kg at the earliest visit against the most recent: a relative change of strictly more than 10% in either direction — a documented rule of thumb for triggering a nutritional work-up you may verify — flags the patient. Patients with fewer than two visits, or with a missing or zero earliest weight, are ignored. For each flagged patient do all three: (1) append the exact alert string 'Weight change >10% — review diet plan' to that patient's alerts array, preserving every existing alert and adding it only if not already present; (2) ensure a weight-recheck request exists on the waitlist — {patient_id:<the patient>, location_id:<the patient's location_id>, requested_date:<episode date + 14 days at midnight UTC>, reason:'Weight recheck — flagged trend', priority:'work_in', status:'waiting'} — created only if that patient has no existing 'waiting' waitlist row with that exact reason; (3) the flag lands in this batch's ops_reports set: first delete any rows with report='weight_alert' and batch_code=<batch_code>, then push one row per flagged patient {report:'weight_alert', batch_code, patient_id, name, first_weight, latest_weight, change_pct:<round(100*(latest-first)/first, 1) — signed>, direction:'gain' or 'loss'}. Everything else stays byte-identical: unflagged patients, the seeded waitlist rows, and every other collection.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 14,
+  "par_steps": null,
+  "max_steps": null,
+  "_par_steps_note": "Intentionally unset — measure real gold API-call count via a live gold run in the QC session (codegen-only pass).",
+  "_max_steps_note": "Intentionally unset — set to roughly par_steps * 1.5 in the QC session per the anti-brute-force rule.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_ops_reports",
-    "veterinary_clinic_system_patients"
+    "veterinary_clinic_system_patients",
+    "veterinary_clinic_system_waitlist",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live visit_records per patient (order by dp(visit_date), tie by created_at then id). Assert flagged set exact (>10% strict); alerts arrays == snapshot alerts + appended string (no dupes); report rows exact incl. rounded change_pct; unflagged patients byte-identical.",
+    "summary": "Verifier recomputes the flagged set two independent ways — a raw-row Python per-patient sort and an independent SQL DISTINCT ON first/last-weight derivation — and both must agree with each other and with the written rows. For each flagged patient: alerts array equals seed alerts plus the appended exact string (no dupes, other fields byte-identical); exactly one waiting waitlist row with the exact reason/fields exists (created only if absent); exactly one 'weight_alert' ops_reports row for this batch with exact first_weight/latest_weight/change_pct/direction. Unflagged patients and all seeded waitlist rows are byte-identical; all collections outside the blast radius canary-hashed unchanged.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live visit_records per patient (order by dp(visit_date), tie by created_at then id). Assert flagged set exact (>10% strict); alerts arrays == snapshot alerts + appended string (no dupes"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "(see verifier.py)", "expect": "see summary above" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_visit_records", "expect": "the flagged-patient set agrees between raw-row Python first/last computation and an independent SQL DISTINCT ON derivation" }
     ]
   },
+  "hazards": [
+    "Strict >10% boundary: patient 25 'Sage' went 37→34 kg (-8.11%) and patient 189 'Buddy' went 32→35 kg (+9.38%) — near-threshold trends that must NOT be flagged; an inclusive or prematurely-rounded threshold adds them and cascades into extra alerts, waitlist rows, and report rows.",
+    "Alerts preservation: patient 13 'Hazel' IS flagged (weight halved, -50.0%) and already carries alerts=['Allergic to penicillins'] — an overwrite instead of an append destroys the seeded allergy alert and fails row identity.",
+    "Name collisions at 300 patients: flagged patients include two 'Rex' (ids 108 and 267), two 'Loki' (96 and 185), two 'Winston' (38 and 64), and two 'Toby' (205 and 289) — keying alerts, waitlist rows, or reports on name merges or drops patients; patient_id is the only safe key.",
+    "Single-visit trap: 91 patients have exactly one visit and 98 have zero — a single recorded weight is not a trend; flagging them roughly doubles the write set.",
+    "Waitlist decoys: seeded waitlist rows (ids 1-6 — 'Limping left forelimb', 'Anal gland expression', 'Dental prophylaxis consult', 'Lameness after trail ride', 'Ear infection re-check') must stay byte-identical and must NOT satisfy the dedup check — the dedup matches on reason='Weight recheck — flagged trend' AND status='waiting' exactly.",
+    "Idempotency: on a re-run the alert is already present, the waitlist row already exists, and the report set is deleted-then-rewritten — run-local delta counters read 0 and corrupt or double-push state."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "veterinary patient weight change more than 10 percent clinically significant alert diet plan",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "2021 AAHA Nutrition and Weight Management Guidelines — screening evaluation (aaha.org): unexplained weight change triggers extended nutritional assessment; each BCS point above 5/9 ≈ 10% overweight",
+          "2021 AAHA Nutrition and Weight Management Guidelines PDF — monitoring plan and weight-change history",
+          "2011 Nutritional Assessment Guidelines (JSAVA) — consistent BW/BCS/MCS tracking over time"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Temporal first-vs-last comparison with strict threshold, array-append semantics, and duplicate-suppression \u2014 a 3-way skill check."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary longitudinal weight trend first-vs-last visit strict threshold alert waitlist report benchmark task",
+        "top_results": [
+          "No public RL benchmark task found combining temporal first-vs-last weight comparison with alert append, waitlist dedup, and a per-patient report",
+          "Existing pet-health analytics tasks are single-metric thresholds, not longitudinal trends",
+          "AAHA weight-management guidance documents the clinical rule but not a verifiable end-state task"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgrades v1's flag-and-report into a three-surface mission: patient alerts (append-only array semantics with seeded decoy alerts), waitlist dedup against byte-identical seeded rows, and a per-patient report — all gated by a strict >10% first-vs-last comparison with real near-threshold decoys (-8.11%, +9.38%) and name-collision hazards that only exist at 10x patient volume."
   }
 }

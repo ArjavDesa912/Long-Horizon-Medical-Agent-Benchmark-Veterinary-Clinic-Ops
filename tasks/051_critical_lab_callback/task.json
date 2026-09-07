@@ -1,52 +1,66 @@
 {
   "task_id": "051_critical_lab_callback",
   "name": "veterinary_clinic_system_051_critical_lab_callback",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "workflow",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "aggregation", "reconciliation", "idempotency"],
   "surface": "backend",
-  "instruction": "Critical lab values demand a documented callback. For every lab_results row with flag 'critical', push one communications row to that patient's owner: channel 'phone', direction 'outbound', subject 'URGENT lab result \u2014 <PatientName>', body '<test_name>: <result_summary>' (copied exactly), logged_by 'Dr. Alvarez', occurred_at on the episode date. Skip any critical result that already has a seeded communication whose subject starts with 'URGENT lab result'. Touch nothing else.",
+  "instruction": "Close the loop on critical lab results under this episode's batch code (read batch_code and episode_date from the ops_meta row with meta_key='episode_state'). A lab_results row with flag='critical' counts as documented only when a communications row exists with that same patient_id, subject='URGENT lab result — <PatientName>' (the patient's name), and body='<test_name>: <result_summary>' copied exactly — punctuation and units matter, and a communication documenting a different result for the same patient does not count. For every critical row lacking such documentation, push that communications row with channel='phone', direction='outbound', logged_by='Dr. Alvarez', occurred_at on the episode date, and owner_id set to the patient's owner_id. Separately, for every critical row — already documented or not — ensure exactly one reminder_queue audit marker exists for this batch: {kind:'lab_callback', status:'done', patient_id, owner_id, queued_by:'system', queued_at on the episode date, message='lab callback <batch_code> verified for lab_result <lab_results id>'}; create it only if absent, never duplicate it. Finally, rewrite this batch's lab-flag audit in ops_reports: delete any existing rows with report='lab_flag_audit' and batch_code=<batch_code>, then push exactly one row per flag value present in lab_results — {report:'lab_flag_audit', batch_code, flag, total, callbacks_documented} — where total is the count of lab_results rows carrying that flag and callbacks_documented is how many of them have a matching 'URGENT lab result' communication as defined above. Change nothing else: no other communications, reminder_queue rows, lab_results, patients, or any other collection.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 6,
+  "par_steps": null,
+  "max_steps": null,
+  "_par_steps_note": "Intentionally unset — measure real gold API-call count via a live gold run in the QC session (codegen-only pass).",
+  "_max_steps_note": "Intentionally unset — set to roughly par_steps * 1.5 in the QC session per the anti-brute-force rule.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_communications"
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: critical rows (1); assert exactly one new comm row per uncovered critical with exact fields; seeded 16 unchanged; total 16+K.",
+    "summary": "From the seed snapshot and live state: each critical lab_results row gets exactly one communications row matching (patient_id, exact subject, exact body) with channel='phone', direction='outbound', logged_by='Dr. Alvarez', dp(occurred_at)=episode date, owner_id=patient's owner — created only if not already documented in seed. Each critical row also gets exactly one reminder_queue marker {kind='lab_callback', status:'done', patient_id, owner_id, queued_by='system', dp(queued_at)=episode date, message='lab callback <batch_code> verified for lab_result <id>'}. ops_reports holds exactly one 'lab_flag_audit' row per flag value present, with total and callbacks_documented each verified two independent ways (raw-row Python join vs SQL GROUP BY / join) that must agree with each other and the written rows. All seeded communications and reminder_queue rows remain byte-identical; every collection outside the blast radius is canary-hashed unchanged.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: critical rows (1); assert exactly one new comm row per uncovered critical with exact fields; seeded 16 unchanged; total 16+K."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "(see verifier.py)", "expect": "see summary above" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_lab_results", "expect": "per-flag totals and callbacks_documented agree between raw-row Python computation and independent SQL aggregation/join" }
     ]
   },
+  "hazards": [
+    "Same-patient, different-result decoy: lab_results id=1 is the only flag='critical' row (patient 4 'Noodle', owner_id 2, 'Serum chemistry panel' / 'Creatinine 4.8 mg/dL (critical high); BUN 92 mg/dL'), but lab_results id=6 is flag='abnormal' on the SAME patient 4 ('SDMA' / '38 µg/dL — elevated; IRIS stage 2 confirmed') — a documentation test keyed on patient alone (or 'any URGENT comm for this patient') corrupts both the per-lab match and the abnormal flag's callbacks_documented count.",
+    "Test-name collision decoy: lab_results id=42 is another 'Serum chemistry panel' (patient 59) but flag='normal' — matching on test_name instead of flag fabricates a second critical row; 10 'abnormal' and 31 'normal' rows must produce zero communications and zero markers.",
+    "Transferred-patient decoy: lab_results id=7 is flag='abnormal' on patient 27 (a transferred patient) — nothing about the critical-callback mission touches it; non-critical flags and non-active patients are all out of scope.",
+    "Queue decoys: seeded reminder_queue holds exactly 4 rows (ids 1-2 kind='vaccination_due' status='queued', id=3 kind='invoice_overdue' status='sent', id=4 kind='boarding_checkin' status='queued') which must survive byte-identical beside the new kind='lab_callback' status='done' markers — an over-broad 'rewrite the queue' or wrong-kind marker fails the row-identity checks.",
+    "Idempotency: the documentation test keys on (patient_id, exact subject, exact body) and the marker on its exact message — a run-local 'I created N rows' delta reads 0 on re-run and either double-pushes or skips the ops_reports rewrite; rows are re-derived from live state and the lab_flag_audit set is deleted-then-rewritten per batch_code."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "critical lab value callback veterinary practice documentation owner notification policy",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "You Make the Call — client callback systems and lab-result callbacks (todaysveterinarybusiness.com)",
+          "Lab Result Communication Workflows for Vet Teams (mcoyhealth.com) — single-source result -> callback -> reminder chain",
+          "Veterinary Lab Result Notification Automation Checklist (ustechautomations.com) — critical flags trigger immediate vet alert and documented client notification"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Exact body copy-through (punctuation and units must survive) + already-handled exclusion."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary critical lab result callback task with per-flag audit report and reminder queue marker benchmark",
+        "top_results": [
+          "No public RL benchmark task found combining lab-flag triage, documented-callback reconciliation, and a per-flag audit report",
+          "Existing clinical-communication tasks in benchmarks are single-message sends without the same-patient/different-result disambiguation",
+          "PIMS callback features (ezyVet, Cornerstone) are described in product docs, not as verifiable end-state tasks"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgrades v1's single communication push into a three-collection reconciliation: the agent must distinguish 'a critical result documented' from 'any urgent comm for this patient' (the seed plants an abnormal SDMA row on the same patient as the critical chemistry panel), write per-flag audit counts derived two independent ways, and keep the whole thing idempotent across re-runs — the seeded queue and comms act as byte-identical decoys beside the new rows."
   }
 }

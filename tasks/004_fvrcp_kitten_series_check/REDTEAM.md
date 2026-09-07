@@ -1,17 +1,20 @@
-# 004_fvrcp_kitten_series_check — REDTEAM notes
+# 004_fvrcp_kitten_series_check — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Feline patients whose FVRCP booster will come due within the next 30 days (from the episode date in ops_meta) need a head's-up before the window opens. For every feline patient with an FVRCP vaccination whose due_date falls in (episode_date, episode_date+30 days] and who has NO queued reminder yet, push one reminder_queue row with kind='vaccination_due', status='queued', queued_by='frontdesk@pawsclinic.com', due_date equal to the vaccination's due_date, and message '<PatientName> FVRCP booster due <YYYY-MM-DD> — book a nurse visit.' Finally, add a summary row with kind='compliance_summary', status='queued', and message='FVRCP due-in-30 count: <N>' where N is the number of reminder rows you created. Cats already covered by a queued vaccination_due reminder must be skipped but still counted in N as zero — i.e. N counts only rows actually created.
+Run the feline FVRCP series review for the episode. Queue one reminder and send one owner email for each feline patient whose FVRCP series is missing, overdue, or due within the next 30 days, excluding feline patients who already have any queued vaccination_due reminder. Write a category-based ops_reports summary and an audit_log entry.
 
 ## Why this is hard / unique
-Half-open date window + exclusion set + a self-referential summary count row; agents routinely miscount or include excluded patients.
+- Three distinct categories (missing, overdue, due soon) with different due dates and messages.
+- FVRCP rows exist for many non-feline species, requiring a patient-species join.
+- Missing-series patients (no FVRCP record) are a large, real target set that a simple due-date filter would miss.
+- Dual-path verification for per-category counts and the total in-need feline count (Python + SQL).
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+1. **Non-feline FVRCP decoys** — the 600-row vaccination table contains FVRCP rows for canine, avian, exotic, and equine patients (e.g., row id 4 for patient 2/Pepper, canine). These must be ignored.
+2. **Missing-series feline patients** — 45 feline patients have no FVRCP record at all and must be flagged as `series start` with `due_date = episode date`.
+3. **Pre-existing queued reminder** — patient 5 (Clementine, feline) has a queued rabies vaccination_due reminder (`reminder_queue` id 2) and must be excluded from the new batch even though she has no FVRCP.
+4. **Half-open date window** — a due_date exactly equal to the episode date is neither overdue nor due soon and must not trigger a reminder; the same is true of any date after `episode + 30`.
+5. **One reminder per patient** — some feline patients have multiple FVRCP rows in the overdue or due-soon windows; only the earliest due_date is used, and only one communication is sent per patient.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships.

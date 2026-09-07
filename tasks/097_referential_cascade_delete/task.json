@@ -1,19 +1,21 @@
 {
   "task_id": "097_referential_cascade_delete",
   "name": "veterinary_clinic_system_097_referential_cascade_delete",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "delete",
+  "category": ["delete", "workflow", "reconciliation"],
   "surface": "backend",
-  "instruction": "Privacy erasure request (GDPR-style right to erasure, vet-clinic analogue): owner id 22 (Faye Lovelace) requests full deletion. Delete: the owner row; all patients of that owner; and every appointments, visit_records, vaccinations, medications, lab_results, billing_invoices, communications, waitlist, boarding_reservations, and files row that references the owner or any of the owner's patients. Then push one ops_reports row {report: 'erasure', batch_code, owner_id: '22', patients_removed: <count>, rows_removed_total: <count including the owner row>}. Every row not related to owner 22 must remain byte-identical.",
+  "instruction": "A GDPR-style right-to-erasure request has been received from the owner whose email is faye.lovelace@example.com. Identify that owner by email, not by any other field (the same phone number is shared with another client, so a phone-based lookup would target the wrong person). Delete the owner, every patient owned by that owner, and every row across the clinical and operational collections that references the owner or any of those patients. Because controlled_substance_log and audit_log are immutable regulatory logs, you may NOT delete rows there: redact patient_id to null in controlled_substance_log for any rows referencing the deleted patients, and append a single audit_log entry documenting the erasure. Also delete any boarding_daily_log rows tied to boarding_reservations that are removed. Finally, push one ops_reports row {report: 'erasure', batch_code, owner_id, owner_email, patients_removed, rows_removed_total, cs_redacted, deleted_by_collection: {<collection>: <count>}}. Every non-target row in every collection must remain byte-identical.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 60,
-  "par_steps": 16,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -30,34 +32,50 @@
     "veterinary_clinic_system_communications",
     "veterinary_clinic_system_waitlist",
     "veterinary_clinic_system_boarding_reservations",
-    "veterinary_clinic_system_files"
+    "veterinary_clinic_system_boarding_daily_log",
+    "veterinary_clinic_system_location_transfers",
+    "veterinary_clinic_system_files",
+    "veterinary_clinic_system_controlled_substance_log",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Compute owner-22 closure from snapshot (patients by owner_id; all referencing rows across the 11 collections). Assert all absent; assert report row exact counts; assert the complement across all 11 collections byte-identical to snapshot.",
+    "summary": "Verify the erasure target is identified by email faye.lovelace@example.com (owner id 22). Owner 22 and patients 26/168/170 gone. All dependent rows across the blast collections gone, except controlled_substance_log id 7 is redacted (patient_id null) and audit_log has exactly one new DAILY erasure entry. Complement rows in every blast collection are byte-identical. Canary all other collections.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Compute owner-22 closure from snapshot (patients by owner_id; all referencing rows across the 11 collections). Assert all absent; assert report row exact counts; assert the complement across all 11 co"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "(see verifier.py)", "expect": "owner/patient closure absent, controlled_substance_log redacted, audit log appended, ops_reports counts exact" },
+      { "type": "dual_path", "collection": "(see verifier.py)", "expect": "closure counts verified from seed snapshot and from live residual state" }
     ]
   },
+  "hazards": [
+    "duplicate phone decoy: owner id 1 (Margaret Whitfield, phone (828) 555-0101) and owner id 22 (Faye Lovelace, same phone) share a phone number. A lookup by phone selects the wrong owner; the task explicitly requires email faye.lovelace@example.com.",
+    "owner 22 has three patients (ids 26, 168, 170). A solution that deletes only the owner row leaves PII in the patient table and fails the patient-preservation check.",
+    "controlled_substance_log id 7 has patient_id '22' (one of the target patients). The immutable DEA log must not be deleted; only patient_id is redacted to null. A cascade delete of this row breaks the controlled_substance_log canary.",
+    "location_transfers ids 5 and 6 both reference target patient id 26 and must be deleted. boarding_reservations ids 11, 13, 95, 122 reference the target patients and must be deleted (no daily logs exist for them).",
+    "The audit_log is append-only; a solution must append a new entry rather than delete or mutate the four seeded audit rows (ids 1-4).",
+    "A broad deletion keyed only on patient_id in billing_invoices is not enough: two invoices reference owner 22 by owner_id with patient_ids that are not in the target patient set (ids 22 and 242). The agent must check both owner_id and patient_id."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary clinic GDPR right to erasure patient data cascade delete medical records",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Clinic Software Right-to-Erasure Workflow: GDPR Guide 2026 (tregovia.com)",
+          "GDPR for veterinary practices in the UK: RCVS & ICO (trustyourwebsite.com)",
+          "Medical Records - CVO Guide (cvo.org)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Transitive cascade delete across 11 collections with an exact preservation guarantee; partial cascades (forgetting files or waitlist) are the expected failure."
+    "uniqueness_searches": [
+      {
+        "query": "RL environment veterinary clinic referential cascade delete controlled substance redaction",
+        "top_results": [
+          "Perfect Pet - generate and pollute relational veterinary clinic databases (github.com)",
+          "vet-salud-database - data integrity and validation tests (github.com)",
+          "World Feedback for Clinical Agents: Diagnosing RL in FHIR Environments (arxiv.org)"
+        ]
+      }
+    ],
+    "differentiation_note": "A GDPR erasure mission that requires email-based target identification, full transitive closure across 12+ collections, and immutable-regulatory-log redaction rather than deletion. The duplicate-phone decoy and controlled-substance redaction nuance are realistic compliance hazards not present in standard cascade-delete benchmarks."
   }
 }

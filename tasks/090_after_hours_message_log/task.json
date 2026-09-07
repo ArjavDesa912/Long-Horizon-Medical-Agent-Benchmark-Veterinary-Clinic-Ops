@@ -1,28 +1,31 @@
 {
   "task_id": "090_after_hours_message_log",
   "name": "veterinary_clinic_system_090_after_hours_message_log",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "create",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["create", "workflow", "reconciliation"],
   "surface": "backend",
-  "instruction": "Log an after-hours voicemail: owner id 7 (Frank Kowalski) called about rescheduling. Push one communications row {owner_id: '7', channel: 'phone', direction: 'inbound', subject: 'After-hours voicemail <batch_code>', body: 'Requested reschedule of next appointment; called after closing.', logged_by: 'answering service', occurred_at: episode timestamp}.",
+  "instruction": "The answering service took a voicemail from owner 7 (Frank Kowalski) about rescheduling an appointment. Follow the after-hours triage protocol for the episode: (1) log an inbound phone communications row from owner 7 with body 'Requested reschedule of next appointment; called after closing.', subject 'After-hours voicemail <batch_code>', logged_by 'answering service', occurred_at the episode timestamp, and patient_id set to the id of that owner's patient; (2) identify the on-call DVM for that patient's location — the provider whose role is 'veterinarian' and whose location_id matches the patient's location_id — and page them with an outbound communications row to that provider (provider_id set to that provider's id, channel 'sms', direction 'outbound', subject 'After-hours page <batch_code>', body 'Reschedule request from Frank Kowalski (owner 7) for patient <patient name> — please call back.', logged_by 'answering service', occurred_at the episode timestamp, owner_id left empty); (3) create exactly one ops_reports row {report: 'after_hours_triage', batch_code, owner_id: '7', patient_id, on_call_provider_id, triage_note: 'Reschedule request paged to <provider full name>.'}. All identity fields must be derived from live data, not hardcoded.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 20,
-  "par_steps": 5,
+  "max_steps": null,
+  "_max_steps_note": "set after live gold measurement in QC session",
+  "par_steps": null,
+  "_par_steps_note": "set after live gold measurement in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_communications"
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Exactly one new row, exact fields incl. nonce in subject; total 17; seeded unchanged.",
+    "summary": "Two new communications rows (inbound voicemail + outbound page) with exact fields, patient_id and provider_id derived from live owner/patient/provider joins; one ops_reports after_hours_triage row for this batch with correct owner/patient/provider/triage_note; all pre-existing communications and other collections byte-identical.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +34,38 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Exactly one new row, exact fields incl. nonce in subject; total 17; seeded unchanged."
+        "expect": "Two new communications rows and one ops_reports row with fields derived from live data; on-call DVM verified by API-vs-SQL dual path."
       }
     ]
   },
+  "hazards": [
+    "Pre-existing communications rows (160 total) reuse a small set of subjects and bodies (e.g., 'Billing question resolved', 'Discussed dental quote', 'Boarding dates confirmed'); matching the new rows by text alone collides with these decoys — the verifier matches by owner_id/patient_id/provider_id plus the live batch_code.",
+    "Owner 7's patient is patient 10 (Willow, equine) with location_id '2' (snapshot row). Provider id 9 (Lucy Tran, groomer) is also at location 2; an agent that picks the first provider at the location without filtering role='veterinarian' will page the wrong person. Provider id 3 (Dr. Priya Natarajan) is the only veterinarian at location 2.",
+    "Provider id 1 (Dr. Elena Alvarez, veterinarian) and id 2 (Dr. Marcus Chen, veterinarian) are both at location 1; an agent hardcoding 'first veterinarian' without joining through the patient's location will page the wrong DVM.",
+    "The ops_reports collection does not exist in the seed snapshot; gold and verifier must tolerate a missing table on first read and create it on demand.",
+    "The communications schema in the snapshot has no patient_id or provider_id columns; the gold must push these foreign keys as extra fields, and the verifier must verify them, or the two new rows cannot be distinguished from the 160 pre-existing decoys."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary after hours voicemail on-call veterinarian paging protocol 2026",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "After-Hours Triage Routing: 3 Approaches Compared 2026 (ustechautomations.com)",
+          "Veterinary Emergency Call Protocol and AI Intake (thequietprotocol.com)",
+          "After-hours veterinary call management (mybcat.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Simple create with nonce embedding \u2014 calibration floor for the create category."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary clinic after-hours triage owner patient provider on-call page ops report benchmark task",
+        "top_results": [
+          "How to Use Veterinary Practice Reporting Every Week (digitail.com)",
+          "Veterinary Clinic Compliance Audit Checklist Template (paperform.co)",
+          "Veterinary Automation Playbook 2026 (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses a simple message-log create with a multi-hop owner/patient/provider lookup and an audit report, requiring the agent to derive the on-call DVM from live data and produce two distinct communications rows plus one ops_reports row. Existing public benchmarks either log a single row or ask for a hardcoded recipient, not a join-driven triage workflow with provider paging."
   }
 }

@@ -1,17 +1,20 @@
-# 072_fee_schedule_parity_check — REDTEAM notes
+# 072_fee_schedule_parity_check — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Corporate wants to know if pricing is uniform. Compare the three locations' fee schedules item-by-item (match on code). Create one ops_reports row {report: 'fee_parity', batch_code, uniform: <true iff every code has identical price across all locations>, divergent_codes: <comma-joined sorted codes whose prices differ, or ''>, checked_codes: <count of distinct codes compared>}.
+Corporate pricing integrity audit: fee schedule parity across locations plus a paid-invoice adherence audit against the canonical fee schedule, written to `ops_reports`.
 
 ## Why this is hard / unique
-Nested-array structural comparison across rows; agents compare row ids instead of item codes.
+- Requires nested-array comparison of `fee_schedules.items` across locations and exact-match reconciliation of invoice line items to fee schedule descriptions.
+- Fuzzy matching is a trap: descriptions like "Vaccination – rabies" and "Boarding (3 nights)" are not the canonical fee schedule names.
+- Several fee schedule codes have zero paid matches but must still appear in the report.
+- Dual-path verification on every numeric aggregate (Python + SQL over the nested JSONB arrays).
+- Only paid invoices count; sent/draft invoices and billing_estimates are decoys.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- All three `fee_schedules` rows have identical `items` (codes WELL-EXAM/SICK-EXAM/DENTAL-PROPHY/VACC-RABIES/CBC-CHEM/BOARD-NIGHT at identical prices), so `uniform` is true only if the comparison is done on the items array.
+- Non-exact-match descriptions: "Vaccination – rabies" (80), "Boarding (3 nights)" (77), "Ear cytology" (77), "Nail trim" (76).
+- Fee codes SICK-EXAM, VACC-RABIES, BOARD-NIGHT have zero paid exact-match lines.
+- Paid exact-match line counts: Wellness examination 87, Dental prophylaxis 77, CBC + chemistry panel 58.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks against a real container before this task ships.

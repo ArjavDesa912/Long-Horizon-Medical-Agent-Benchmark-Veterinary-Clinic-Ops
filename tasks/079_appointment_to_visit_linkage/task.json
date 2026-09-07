@@ -1,28 +1,31 @@
 {
   "task_id": "079_appointment_to_visit_linkage",
   "name": "veterinary_clinic_system_079_appointment_to_visit_linkage",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "aggregation",
+  "category": ["reconciliation", "aggregation", "repair"],
   "surface": "backend",
-  "instruction": "Measure clinical follow-through: what fraction of completed appointments have a matching visit record (same patient, same provider, visit_date equal to the appointment_date)? One ops_reports row {report: 'follow_through', batch_code, completed_appointments, matched: <completed appointments with an exact 3-field match in visit_records>, unmatched, match_pct: <round(100*matched/completed,1)>, unmatched_ids: <comma-joined ascending ids of unmatched completed appointments, or ''>}.",
+  "instruction": "Run the appointment-to-visit follow-through audit. A completed appointment is clinically closed only when a visit_records row exists with the exact same patient_id, provider_id, and a visit_date whose calendar day equals the appointment's appointment_date calendar day. (1) Read the live appointments and visit_records; identify which completed appointments already have a matching seed visit record and do not create duplicates for those. (2) For every other completed appointment, create a minimal visit_records row with the same patient_id, provider_id, location_id, visit_date, weight_kg copied from the patient, generated_from set to the appointment id, and a subjective note that includes the appointment id. (3) Write one ops_reports row {report: 'follow_through', batch_code, completed_appointments, already_matched, generated, matched, unmatched, match_pct, unmatched_ids, generated_ids}. unmatched_ids must be the ascending comma-joined ids of any unmatched completed appointments (empty string if none), and generated_ids must be the ascending comma-joined ids of all generated appointments. Delete any prior follow_through row for this batch before writing. The verifier checks every seed visit_record row is unchanged, that every new visit row has a unique generated_from pointing to a completed appointment with a matching triple, and that all counts are re-derived both from raw rows and from SQL.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 13,
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
+  "max_steps": null,
+  "_max_steps_note": "set to par_steps * 1.5 after live measurement",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
+    "veterinary_clinic_system_visit_records",
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live appointments + visit_records with exact triple match; assert ints, pct, CSV ids; nonce.",
+    "summary": "Identify the one completed appointment that already matches a seed visit_record by exact triple (patient_id, provider_id, calendar-day date). Create one new visit_record for each of the remaining completed appointments with generated_from set to the appointment id and matching triple. Write one ops_reports follow_through row with the exact counts and id lists. Verifier canaries every other collection, asserts each new visit row identity, and recomputes counts via raw rows and SQL.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +33,57 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live appointments + visit_records with exact triple match; assert ints, pct, CSV ids; nonce."
+        "collection": "veterinary_clinic_system_visit_records",
+        "expect": "175 new visit rows, one per completed appointment that lacks a matching seed visit, each with generated_from = appointment id and triple matching the appointment"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "exactly one follow_through row for the batch with completed, already_matched, generated, matched, unmatched, match_pct, unmatched_ids, generated_ids"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_appointments",
+        "expect": "completed count and matched count agree between raw-row Python and SQL join; new-visit and pre-existing counts agree between raw-row set identity and SQL id-threshold joins"
       }
     ]
   },
+  "hazards": [
+    "Pre-existing match: completed appointment id 486 (patient_id 30, provider_id 3, appointment_date 2026-08-29) matches seed visit_record id 164 with the same triple. A solution that creates a new visit_record for every completed appointment (including this one) over-reports generated and under-reports already_matched.",
+    "Duplicate completed triples: appointment ids 150 and 378 both have (patient_id 67, provider_id 3, appointment_date 2026-08-19); ids 154 and 155 both have (patient_id 61, provider_id 3, appointment_date 2026-08-05). Two completed appointments can share the same triple, so a solution that creates one visit per unique triple produces 174 records and fails the new-visit count and generated_ids set equality.",
+    "Decoy seed visits: there are 371 seed visit_records (ids 1..371) and only one matches a completed appointment. Every other seed visit must survive byte-identical. Any update, deletion, or addition of generated_from to a seed row is caught by the row-level canary and the generated_from set check.",
+    "Partial-match traps: matching on patient_id only or on visit_date only over-matches and creates either too few or too many visit records. The verifier requires an exact triple match and a generated_from value equal to a real completed appointment id.",
+    "No-visit 100% report: an agent may write a follow_through row claiming match_pct=100.0 and empty unmatched_ids without creating the visit records. The verifier's SQL join and row-level generated_from checks require the 175 new visit rows to actually exist."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary appointment visit record linkage follow-through audit EHR",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Establishment of methods for extracting and analysing patient data from electronic practice management software systems used in first opinion veterinary practice in the UK",
+          "A method for extracting electronic patient record data from practice management software systems used in veterinary practice (PMC5073902)",
+          "Assessing the Feasibility of Retrospective and Prospective Clinical Audit in Farm Animal Veterinary Practice (mdpi.com)"
+        ]
+      },
+      {
+        "query": "veterinary practice appointment to visit record matching completed appointments audit",
+        "top_results": [
+          "About data validation of appointment records | ezyVet Knowledge Center",
+          "Accuracy of the electronic patient record in a first opinion veterinary practice (eprints.whiterose.ac.uk)",
+          "How to Audit Your Veterinary Medical Records for Missed Charges (novavetfamily.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Three-field join predicate with an id-listing requirement; partial matches (patient-only) are the classic overcount."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary appointment visit record generated_from triple match benchmark task",
+        "top_results": [
+          "How to Use Veterinary Practice Reporting Every Week (digitail.com)",
+          "Veterinary Clinic Compliance Audit Checklist Template (paperform.co)",
+          "Veterinary Automation Playbook 2026 (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses a reconciliation sweep (find the one completed appointment with a pre-existing seed visit) with a repair pass (generate the missing visit records) and an aggregation/report (follow-through counts and id lists). The task requires exact triple matching, handling duplicate completed-appointment triples, and tracking the source appointment id via generated_from on the generated rows. The verifier uses both row-level set identity and SQL id-threshold joins for dual-path counts, not a single join."
   }
 }

@@ -1,17 +1,19 @@
-# 080_enterprise_kpi_pack — REDTEAM notes
+# 080_enterprise_kpi_pack — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-The Monday leadership pack, all KPIs in one row. Create one ops_reports row {report: 'kpi_pack', batch_code, on_episode_date: '<YYYY-MM-DD>', appointments_today, boarding_occupancy_pct: <100*occupied/total runs, round 1>, vaccinations_overdue: <vaccinations with due_date strictly before episode date>, outstanding_balance_total: <sum over owners of balance, dollars>, open_invoices: <invoices status 'sent' or 'overdue'>, critical_labs_open: <lab_results flag 'critical'>}.
+Generate the enterprise KPI pack for the leadership dashboard as of the episode date. The pack is a 5-row ops_reports write (enterprise, one row per location, and AR aging) with every aggregate recomputed two independent ways (API-filtered Python and SQL). It requires cross-collection reconciliation between boarding_runs and boarding_reservations and correctly handles decoy rows (draft invoice, transferred patient).
 
 ## Why this is hard / unique
-Six-source KPI fan-in matching the dashboard's KPI row definitions; each KPI has its own subtlety (strict-before, status set, float sum).
+- Multi-fan-in aggregation across 6+ collections with a single combined end-state.
+- Dual-path assertion (Python vs SQL) on every KPI value.
+- Reconciliation between the occupancy board and the reservation ledger.
+- AR aging with date buckets and strict open-invoice status semantics.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- `billing_invoices` id 3 has status='draft' and amount_paid=0; it must not be counted as an open invoice or in AR.
+- `patients` id 27 has status='transferred'; it must not be counted as an active patient.
+- `boarding_reservations` has only 5 checked_in rows, while the collection has 140 rows; only the checked-in subset reconciles to occupied runs.
+- Only `billing_invoices` ids 1 and 2 have status='sent' in the seed; the open-invoice and AR numbers are exactly 2 invoices totaling 737.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

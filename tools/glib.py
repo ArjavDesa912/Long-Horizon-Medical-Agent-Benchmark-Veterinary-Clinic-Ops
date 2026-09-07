@@ -3,7 +3,7 @@
 Shared stdlib-only helpers for veterinary_clinic_system gold solutions.
 
 Gold scripts prove solvability end-to-end: they run against a FRESH container
-via the public VibeDB REST API, exactly the way an agent is expected to.
+via the public Stackhouse REST API, exactly the way an agent is expected to.
 This module provides the write-side primitives (vlib.py is read-only).
 
 Usage in a gold script:
@@ -25,14 +25,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VIBEDB_URL = os.environ.get("VIBEDB_URL", "http://127.0.0.1:8080").rstrip("/")
+STACKHOUSE_API_URL = os.environ.get("STACKHOUSE_API_URL", "http://127.0.0.1:9090").rstrip("/")
 PREFIX = "veterinary_clinic_system_"
 PAGE = 500
 
 
 class Gold:
     def __init__(self, email: str = "rl-admin@rl.local", password: str = "RLVerifier2025!"):
-        self.url = VIBEDB_URL
+        self.url = STACKHOUSE_API_URL
         self.token = self.login(email, password)
         self.steps = 0  # API-call counter -> recorded as par_steps
 
@@ -129,10 +129,23 @@ class Gold:
 
     # ---------------------------- misc ---------------------------- #
     def nonce(self, collection: str = "ops_meta", field: str = "batch_code") -> str:
-        rows = self.q(collection, meta_key="episode_state", limit=1)
-        if not rows:
-            raise RuntimeError(f"nonce row missing in {PREFIX}{collection}")
-        return str(rows[0][field])
+        """Read the per-episode nonce env.py injects into ops_meta at reset().
+        Retries briefly: under concurrent container load, this gold call can
+        outrace env.py's nonce-injection write (table not yet created, or the
+        row not yet visible)."""
+        import time
+
+        last_err: Exception | None = None
+        for attempt in range(10):
+            try:
+                rows = self.q(collection, meta_key="episode_state", limit=1)
+            except RuntimeError as e:
+                last_err = e
+                rows = []
+            if rows:
+                return str(rows[0][field])
+            time.sleep(0.5 * (attempt + 1))
+        raise last_err or RuntimeError(f"nonce row missing in {PREFIX}{collection}")
 
     @staticmethod
     def dp(value) -> str | None:

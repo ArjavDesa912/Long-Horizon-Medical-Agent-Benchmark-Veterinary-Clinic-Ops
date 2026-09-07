@@ -1,28 +1,33 @@
 {
   "task_id": "085_reminder_staleness_sweep",
   "name": "veterinary_clinic_system_085_reminder_staleness_sweep",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "delete",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["delete", "workflow", "report"],
   "surface": "backend",
-  "instruction": "Queued reminders go stale. Delete every reminder_queue row with status 'queued' whose queued_at is more than 14 days before the episode date. Rows with other statuses, and fresh queued rows, remain byte-identical.",
+  "instruction": "The front-desk reminder queue is carrying stale reminders that were never sent. The practice SLA is that any queued reminder older than two weeks becomes stale and should be dismissed. Run the stale-reminder sweep as of the episode date: identify every reminder_queue row with status 'queued' whose queued_at is more than 14 days before the episode date, dismiss it by setting status to 'dismissed' and dismissed_at to the episode timestamp, and notify the owner. For vaccination and boarding reminders the queue row only contains patient_id, so the owner must be resolved through patients; for invoice reminders the owner_id is on the queue row. After dismissing, push a sweep summary to ops_reports (report='stale_reminder_sweep') and append one audit_log entry documenting the sweep. The ops_reports row must include the episode batch_code, the count of dismissed reminders, a breakdown by kind, and the sorted list of dismissed reminder ids. Do not touch reminders that are not 'queued', reminders that are queued but less than two weeks old, or any collection outside the blast radius.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_reminder_queue"
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "From snapshot: queued rows with (ep - queued_at).days > 14 must be ABSENT; all other rows byte-identical; count == 4 - K.",
+    "summary": "Every queued reminder older than 14 days (queued_at < episode_date - 14) is status='dismissed' with dismissed_at on the episode date; all other queue rows byte-identical. One dismiss-notice communications row is pushed per dismissed reminder, addressed to the correct owner (resolved via patients for vaccination/boarding, from queue for invoice). One ops_reports row report='stale_reminder_sweep' with batch_code, dismissed count, by_kind JSON, and sorted dismissed_ids. One audit_log entry for the sweep. Every aggregate is computed by raw-row Python filter and by independent SQL (dual-path).",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +36,42 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "From snapshot: queued rows with (ep - queued_at).days > 14 must be ABSENT; all other rows byte-identical; count == 4 - K."
+        "expect": "Dismissed stale queued reminders, per-dismissal communications, sweep ops_reports, and one audit_log entry, all derived from live queue/patient/owner data and the episode date."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_reminder_queue",
+        "expect": "Stale-queued counts and kind breakdowns are recomputed by independent SQL and raw-row filter and must agree."
       }
     ]
   },
+  "hazards": [
+    "reminder_queue id=3 (kind='invoice_overdue', status='sent', queued_at='2026-09-01T21:08:41.265+00:00') is older than the stale threshold but not 'queued', so it must remain byte-identical; a solution that acts on any old row or any invoice_overdue row touches this decoy and fails.",
+    "reminder_queue id=2 (kind='vaccination_due', status='queued', queued_at='2026-09-04T21:08:41.265+00:00', due_date='2026-09-10T00:00:00+00:00') has a future due_date but a stale queued_at; a solution that uses due_date instead of queued_at as the staleness clock will act on the wrong predicate.",
+    "reminder_queue id=4 (kind='boarding_checkin', status='queued', queued_at='2026-09-04T21:08:41.265+00:00', patient_id='8') is a non-vaccination queued reminder that is also stale; a solution that only sweeps vaccination_due reminders misses this row.",
+    "The vaccination and boarding reminder rows (ids 1 and 2: patient_id='2'; id 4: patient_id='8') have owner_id=null; the owner must be resolved through the patients collection (patient 2 -> owner 1, patient 5 -> owner 3, patient 8 -> owner 5). A solution that reads owner_id directly from these queue rows will address notifications to a null owner."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice reminder queue SLA stale two weeks dismissal automated sweep policy",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Reminder Management in Veterinary Practice - Vetstoria",
+          "Client Communication Best Practices - VetTriage",
+          "Automated Reminder Queues in Small Animal Practice - DVM360"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Conditional delete where the predicate uses a timestamp the agent must age against the episode nonce; blanket-deleting queued rows fails."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary reminder staleness sweep dismiss queued notifications owner lookup benchmark task",
+        "top_results": [
+          "Vetstoria Reminder Queue Hygiene",
+          "eVetPractice Stale Notification Cleanup",
+          "Pulse Veterinary Reminder Sweep Dashboard"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses a conditional status update on a small append-only queue with patient-owner resolution, an ops_reports aggregate, and an audit log entry. The staleness predicate is on queued_at, not due_date; the decoy sent invoice reminder tests status filtering; and the boarding-checkin reminder tests kind-agnostic sweeping. Dual-path SQL vs raw-row verification is required."
   }
 }

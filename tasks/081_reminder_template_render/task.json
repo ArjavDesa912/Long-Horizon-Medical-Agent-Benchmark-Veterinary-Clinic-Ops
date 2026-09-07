@@ -1,19 +1,21 @@
 {
   "task_id": "081_reminder_template_render",
   "name": "veterinary_clinic_system_081_reminder_template_render",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "workflow",
-  "surface": "frontend",
-  "instruction": "Render the seeded 'Vaccination overdue (SMS)' reminder template for every patient with an overdue vaccination (due_date strictly before the episode date) who is NOT already in the queue with a queued vaccination_due row. Substitute {{patient_name}}, {{vaccine_type}}, {{due_date YYYY-MM-DD of the patient's oldest overdue vaccination}}, and {{clinic_phone}} with the phone of the LOCATION the patient belongs to. Push one row per patient: {kind: 'vaccination_due', patient_id, due_date: <oldest overdue due_date>, message: <rendered template>, status: 'queued', queued_by: 'system', queued_at: episode timestamp}.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "reconciliation", "update"],
+  "surface": "backend",
+  "instruction": "Render and queue the vaccination reminder campaign for the episode. Use the two live templates in reminder_templates named 'Vaccination overdue (SMS)' (sms channel) and 'Vaccination due (email)' (email channel). For every patient with an overdue vaccination (due_date strictly before the episode date) who is NOT already in the reminder_queue with a queued vaccination_due row, push one SMS reminder row. For every patient with NO overdue vaccination but at least one vaccination due in the next 7 days (episode_date <= due_date <= episode_date + 7 days inclusive) who is NOT already queued, push one EMAIL reminder row. Use the patient's oldest overdue vaccination for SMS and the soonest upcoming vaccination for email. Substitute {{patient_name}}, {{vaccine_type}}, and {{due_date}} in both templates; for SMS also substitute {{clinic_phone}} with the phone of the LOCATION the patient belongs to. Each queue row must be: {kind: 'vaccination_due', patient_id, due_date: <YYYY-MM-DD>T00:00:00.000Z of the selected vaccination, message: <rendered template>, channel: 'sms'|'email', status: 'queued', queued_by: 'system', queued_at: <episode timestamp>}. Do not duplicate patients already in the queue; do not touch any non-vaccination_due queue rows.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 11,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session; placeholder for hardmode v2",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session; placeholder for hardmode v2",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_reminder_queue"
   ],
   "success_criteria": {
-    "summary": "Fetch template from live reminder_templates (name 'Vaccination overdue (SMS)'). Compute target set (overdue patients minus already-queued). Assert rendered messages exactly match template substitution (patient name, oldest-overdue vaccine_type + dp(due_date), location phone from snapshot locations); totals exact; seeded rows unchanged.",
+    "summary": "The live templates are rendered exactly for the target set of patients. Each target patient gets one new reminder_queue row with the correct channel, message, due_date, and status. Existing queue rows are byte-identical. No non-vaccination_due rows are modified. The verifier recomputes the target set two independent ways (Python filter and SQL) and confirms the rendered messages.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +32,45 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Fetch template from live reminder_templates (name 'Vaccination overdue (SMS)'). Compute target set (overdue patients minus already-queued). Assert rendered messages exactly match template substitution"
+        "collection": "veterinary_clinic_system_reminder_queue",
+        "expect": "exact count and content of rendered vaccination_due rows for overdue + upcoming patients, no duplicate patients, existing rows unchanged"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_vaccinations",
+        "expect": "the overdue and upcoming patient sets are also derived via independent SQL and agree with the API-filtered computation"
       }
     ]
   },
+  "hazards": [
+    "reminder_queue id 3 (kind='invoice_overdue', status='sent') and id 4 (kind='boarding_checkin', status='queued') are decoys; an over-broad 'mark all queued reminders sent' or 'queue for all patients' solution touches them and fails the decoy canary.",
+    "reminder_queue already contains queued vaccination_due rows for patient 2 (id 1, due_date '2026-08-14') and patient 5 (id 2, due_date '2026-09-10'). Both patients fall in the target window for a typical episode but must not receive a duplicate reminder.",
+    "The SMS template includes {{clinic_phone}}, which must be the patient's location phone (locations id 1/2/3 have phones (828) 555-0142, (864) 555-0177, (865) 555-0129). Hardcoding any single phone fails for patients at the other locations.",
+    "A patient with the same name as another patient of the same owner can share both name and overdue count, so matching queue rows by patient_id (not by message text) is required to avoid dropping or double-counting.",
+    "Date boundary: due_date < episode_date is overdue; episode_date <= due_date <= episode_date + 7 days is upcoming; due_date exactly equal to episode_date is upcoming, not overdue. Off-by-one inclusion/exclusion changes the SMS vs email split and the patient count.",
+    "The 'Vaccination due (email)' template does not contain {{clinic_phone}}; using the SMS template for an upcoming patient would produce a wrong message. The 'Vaccination overdue (SMS)' template says 'past due', so it must only be used for overdue patients."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary reminder template SMS email overdue upcoming vaccine schedule 2026",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "AAHA vaccination guidelines and reminder best practices (aaha.org)",
+          "Client communication templates for veterinary practices (lifelearn.com)",
+          "SMS vs email appointment reminders in veterinary software (veterinarypracticenews.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Template rendering with a multi-source substitution map (patient + vaccination + location phone); agents hardcode the phone or use the wrong due date."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary vaccination reminder queue two templates overdue upcoming patient-specific rendering benchmark",
+        "top_results": [
+          "Automated veterinary reminder workflows: SMS and email (vetstoria.com)",
+          "Practice management system reminder queue design",
+          "Two-channel reminder campaign with existing-queue deduplication"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses two live templates (SMS overdue + email upcoming), two independent patient windows, and existing-queue deduplication into one campaign. Requires patient/location joins and exact message substitution, including a channel-specific field that the v1 task did not have."
   }
 }

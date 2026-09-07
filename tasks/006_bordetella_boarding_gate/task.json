@@ -1,60 +1,68 @@
 {
   "task_id": "006_bordetella_boarding_gate",
   "name": "veterinary_clinic_system_006_bordetella_boarding_gate",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "update",
-  "surface": "websearch",
-  "instruction": "Clinic policy (standard boarding-kennel practice \u2014 verify online if needed): a dog may not check in for boarding unless its bordetella vaccination stays current through the end of the stay. For every boarding reservation with status 'reserved' whose patient is canine and whose latest bordetella due_date is on or before the reservation's check_out date, set the reservation's status to 'waitlisted_vax' and add a field hold_reason='bordetella lapse before checkout'. Leave every other reservation and field untouched. If a canine patient has no bordetella record at all, treat it as lapsed.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "update", "reconciliation"],
+  "surface": "backend",
+  "instruction": "Run the boarding bordetella gate for the episode. A dog may not check in for boarding unless its bordetella vaccination stays current through the end of the stay. For every boarding reservation with status in ('reserved','checked_in') whose patient is canine and whose latest bordetella due_date is on or before the reservation's check_out date, OR whose patient has no bordetella record at all, update the reservation's status to 'waitlisted_vax' and add hold_reason='bordetella lapse before checkout', leaving all other reservation fields untouched. For each newly waitlisted reservation, push one outbound communications row to the owner with patient_id set: channel='email', direction='outbound', subject='Boarding hold — <batch_code>', body='Reservation <id> for <PatientName> is on hold; bordetella due <due or 'missing'> is before checkout <check_out>.', logged_by='system', occurred_at=episode. Then write one ops_reports row with report='boarding_gate', batch_code, total_waitlisted (all statuses), canine_reserved_count, canine_checked_in_count, missing_bordetella_count, lapsed_due_count, and episode_date. Finally append one audit_log entry with action='BOARDING_GATE_REVIEW', actor='system', actor_role='system', target_collection='boarding_reservations', target_id=<batch_code>, details summarizing the counts, and occurred_at=episode. Leave every other reservation, every non-canine reservation, and all unrelated collections untouched.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session (anti-brute-force); this session cannot run against a container",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session; placeholder only",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_boarding_reservations"
+    "veterinary_clinic_system_boarding_reservations",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Compute expected set from snapshot: reserved reservations, canine patient, latest bordetella due_date (by patient) <= dp(check_out) OR no bordetella row. Assert those reservations have status=='waitlisted_vax' + exact hold_reason; assert all other reservations byte-identical to snapshot; count stays 14.",
+    "summary": "Expected set = canine boarding reservations (status 'reserved' or 'checked_in') whose latest bordetella due_date <= dp(check_out) or who have no bordetella record. Each target reservation is updated exactly once with status='waitlisted_vax' and hold_reason='bordetella lapse before checkout' while preserving other fields. One outbound email per target reservation is created keyed by (subject, patient_id). One ops_reports row and one audit_log entry are created for the batch, with counts matching a Python filter and an independent SQL query. All other reservations and all non-blast collections remain byte-identical to seed.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Compute expected set from snapshot: reserved reservations, canine patient, latest bordetella due_date (by patient) <= dp(check_out) OR no bordetella row. Assert those reservations have status=='waitli"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside the declared blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_boarding_reservations", "expect": "target reservations updated with exact status/hold_reason and no other field changed; all others byte-identical to seed" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_boarding_reservations+vaccinations", "expect": "target reservation count and per-status breakdown computed by Python and SQL and matched to ops_reports" }
     ]
   },
+  "hazards": [
+    "The gate applies to both 'reserved' and 'checked_in' reservations; restricting to 'reserved' misses checked-in canine rows such as ids 1 and 3.",
+    "Non-canine reservations (feline, avian, exotic, equine) must not be waitlisted, even if they have a bordetella vaccination row in the table.",
+    "A canine patient with no bordetella record at all is treated as lapsed and must be waitlisted.",
+    "The comparison is against the reservation's check_out date, not the episode date or check_in date; reservation 76 (patient 52, due 2026-11-14, checkout 2026-11-23) is a canonical lapsed case.",
+    "Only the target reservations' status and hold_reason change; all other fields (check_in, check_out, run_id, notes, created_at, etc.) must remain byte-identical to seed.",
+    "Multi-pet owners may have several reservations on hold; communications must be one per target reservation (keyed by reservation id + patient_id), not one per owner."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "boarding kennel bordetella vaccination required before checkout veterinary policy",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "Working with kennel vaccine policies - Veterinary Practice News",
+          "Vaccination Records at Your Boarding Kennel: How to Stop Chasing Paperwork | Goodstay",
+          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "bordetella vaccination required boarding check-in \"waitlisted_vax\" veterinary kennel gate",
+        "query": "bordetella boarding gate canine reservation waitlisted_vax hold_reason checkout audit ops_reports benchmark",
         "top_results": [
+          "Kennel Cough (Bordetella) Vaccine for Dogs | PetMD",
           "Working with kennel vaccine policies - Veterinary Practice News",
-          "Vaccination Records at Your Boarding Kennel: How to Stop Chasing Paperwork | Goodstay"
+          "AAHA Canine Vaccination Guidelines"
         ]
       }
     ],
-    "differentiation_note": "Real kennel rule (vaccine must cover the whole stay, not just check-in day) + missing-record-implies-lapsed edge; date-window comparison against checkout, not today."
+    "differentiation_note": "Fuses a multi-status boarding gate, missing-record handling, owner notification, and an aggregate audit/report into a single idempotent batch. The date comparison is against checkout rather than the episode date, and the entire outcome is validated by dual-path SQL/Python counts. No public benchmark combines a kennel gate with owner communication and audit logging."
   }
 }

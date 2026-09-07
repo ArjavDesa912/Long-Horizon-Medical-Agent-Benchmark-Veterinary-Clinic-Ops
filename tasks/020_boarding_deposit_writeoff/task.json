@@ -1,53 +1,79 @@
 {
   "task_id": "020_boarding_deposit_writeoff",
   "name": "veterinary_clinic_system_020_boarding_deposit_writeoff",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "update",
+  "category": ["update", "workflow", "aggregation"],
   "surface": "websearch",
-  "instruction": "No-show policy time. A 'reserved' reservation whose check_in date has passed (strictly before the episode date) without the guest arriving is a no-show. For each one: set the reservation status to 'cancelled' and add cancellation_reason 'no_show'. Then charge the standard no-show fee the clinic applies \u2014 one night's boarding at that location's BOARD-NIGHT fee-schedule rate \u2014 by INCREASING the owner's balance by exactly that amount (verify typical kennel no-show fee practice online if unsure; one night is the common standard). Owners with multiple no-show reservations are charged once per reservation. Touch nothing else.",
+  "instruction": "Run the month-end boarding no-show forfeiture pass. (1) In veterinary_clinic_system_boarding_reservations, find every reservation with status='reserved' whose check_in date is strictly before the episode date (ops_meta.episode_date). For each, set status='cancelled' and cancellation_reason='no_show'. (2) Charge the standard no-show fee — one night's boarding at that reservation's location's BOARD-NIGHT fee-schedule rate (verify typical kennel no-show/cancellation policy online if unsure; one night is the common standard). Compute the fee per reservation from the fee_schedule items for that location, then increase the owner's balance by the sum of that owner's fees (aggregate by owner). (3) For each affected owner, push one outbound email communications row: channel='email', direction='outbound', subject='No-show deposit forfeiture <batch_code>', body='<OwnerFullName> — reservation <reservation_id> for <PatientName> (check-in <YYYY-MM-DD>) was a no-show. A $<fee with 2 decimals> forfeiture has been applied to your account.', logged_by='system', occurred_at the episode timestamp, owner_id and patient_id set. (4) For each no-show reservation, append one audit_log row: action='BOARDING_NO_SHOW', actor='system', actor_role='system', target_collection='boarding_reservations', target_id=<reservation_id as string>, details='No-show fee $<fee with 2 decimals> charged to owner <owner_id>', occurred_at the episode timestamp. (5) Push one ops_reports row: report='boarding_no_show_summary', batch_code, reservation_count, total_fees (dollars), owners_affected, location_breakdown (dict keyed by location_id with {reservation_count, fee_total}). Leave all non-target reservations (checked_in, checked_out, and future reserved with check_in >= episode) and every other collection untouched. The solution must be idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 13,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
     "veterinary_clinic_system_boarding_reservations",
-    "veterinary_clinic_system_owners"
+    "veterinary_clinic_system_owners",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: reserved reservations with dp(check_in)<ep -> assert cancelled + reason. For each affected owner: assert balance == snapshot balance + fee*count (cents, fee from location fee schedule BOARD-NIGHT). All other owners byte-identical; reservation count 14.",
+    "summary": "Target set = reserved reservations with dp(check_in)<ep (live, depends on episode jitter). For each target: status='cancelled', cancellation_reason='no_show'; owner balance increased by per-owner sum of BOARD-NIGHT fees; one outbound communication per affected owner keyed by (subject, owner_id, patient_id); one audit per no-show reservation keyed by (action, target_collection, target_id, details); one ops_reports 'boarding_no_show_summary' for this batch with counts/fees/location breakdown computed two ways (Python filter and SQL GROUP BY) and agreeing. All non-target reservations and all other collections byte-identical.",
     "checks": [
       {
         "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
+        "collections": "all seeded collections outside the declared blast_radius"
       },
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "From snapshot: reserved reservations with dp(check_in)<ep -> assert cancelled + reason. For each affected owner: assert balance == snapshot balance + fee*count (cents, fee from location fee schedule B"
+        "expect": "Target no-show reservations updated; owner balances, communications, audit_log, and ops_reports match the re-derived end-state; idempotent on re-run."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_boarding_reservations",
+        "expect": "Target no-show count, per-location counts, and total fees agree between a raw-row Python filter and an independent SQL query."
       }
     ]
   },
+  "hazards": [
+    "Future reserved reservations are decoys: at the default episode 2026-09-30 the seed snapshot has 22 reserved rows, but only those with check_in strictly before the episode are no-shows. Examples of future decoys that must NOT be touched: id 18 (patient 35, check_in 2026-10-13), id 20 (patient 200, check_in 2026-10-27), id 51 (patient 129, check_in 2026-10-24). At 2026-09-30 the target count is 10 (ids 6,7,8,17,65,74,85,98,99,128); at 2026-09-27 it drops to 7, so hardcoded counts fail.",
+    "Non-reserved rows are decoys: ids 1-5 are checked_in and ids 9-15, 16, 50, 100, 140 are checked_out; these must remain byte-identical. A solution that bulk-flips anything with status='reserved' without checking check_in, or that flips 'checked_out' stays, touches these and fails the canary.",
+    "Fee must come from the location's fee_schedule, not a constant: all three fee_schedules in the snapshot contain a BOARD-NIGHT item priced at 38 dollars, but a solution that hardcodes 38 may pass this seed but fails on any fee-schedule change; the verifier joins fee_schedules by location_id and item code.",
+    "Owner balance is additive and aggregated by owner: at 2026-09-30 the affected owners are 9, 11, 12, 16, 72, 100, 101, 178, 217 (and one more with ep jitter). The fee is added to the existing balance, not set to an absolute value, and an owner with multiple no-shows must be charged once per reservation.",
+    "Idempotency and duplicate prevention: a second run must not push duplicate communications, audit rows, or ops_reports rows for the same batch. The gold must check the existing live state before pushing new rows; the verifier enforces exactly one communication per affected owner and one audit per no-show reservation."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "kennel boarding no show fee one night charge cancellation policy veterinary 2026",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Boarding Cancellation Policy - Kingdale Kennels",
+          "Kennel No-Show and Cancellation Fees - Five Points Kennels",
+          "Veterinary Boarding No-Show Fee Guidelines - dvm360"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Balance mutation must be additive to a live value (not absolute) and aggregated per owner; fee rate comes from a fee-schedule join, not the instruction."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary clinic boarding no-show fee aggregated by owner audit log communications ops_reports task",
+        "top_results": [
+          "Kennel Management Software No-Show Fee Automation",
+          "Veterinary Practice Workflow: Boarding Cancellations",
+          "Pet Boarding Deposit Forfeiture Policy Benchmark"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses a reservation-status migration, fee-schedule join, owner-balance aggregation, audit trail, owner notification, and summary reporting in one idempotent month-end pass. Dual-path verification on the no-show count and fees; red-herring future reservations and non-reserved statuses are confirmed from the 140-row boarding_reservations seed."
   }
 }

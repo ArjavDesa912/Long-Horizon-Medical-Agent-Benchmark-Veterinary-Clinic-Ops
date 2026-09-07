@@ -4,32 +4,34 @@
     "noop": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: vaccination 1 due_date: expected '2026-12-02', found '2027-02-27'"
+        "FAIL: vaccination 1 due_date: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 0.8
+      "seconds": 3.3
     },
     "random": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: vaccination 1 due_date: expected '2026-12-02', found '2027-02-27'"
+        "FAIL: vaccination 1 due_date: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 0.2
+      "seconds": 0.3
     },
     "hardcode": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: vaccination 8 due_date: expected '2027-02-06', found '2026-10-03'"
+        "FAIL: vaccination 1 due_date: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 15.3
+      "seconds": 0.3
     },
     "gold": {
       "exit": 0,
-      "stdout_tail": [],
+      "stdout_tail": [
+        "gold done in 113 API calls"
+      ],
       "stderr_tail": [],
-      "seconds": 1.4
+      "seconds": 4.3
     },
     "verify_after_gold": {
       "exit": 0,
@@ -37,7 +39,7 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 3.1
+      "seconds": 6.6
     },
     "verify_idempotent": {
       "exit": 0,
@@ -45,17 +47,34 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 0.3
+      "seconds": 0.4
+    },
+    "gold_alt": {
+      "exit": 0,
+      "stdout_tail": [
+        "gold_alt done in 111 API calls"
+      ],
+      "stderr_tail": [],
+      "seconds": 5.5
+    },
+    "verify_after_gold_alt": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 8.0
     }
   },
-  "reset_seconds": 19.5,
-  "nonce": "EP-71595279",
+  "reset_seconds": 35.7,
+  "nonce": "EP-29262614",
   "verdicts": {
     "noop_fail": true,
     "random_fail": true,
     "hardcode_fail": true,
     "gold_pass": true,
-    "idempotent_pass": true
+    "idempotent_pass": true,
+    "gold_alt_pass": true
   },
   "pass": true
 }

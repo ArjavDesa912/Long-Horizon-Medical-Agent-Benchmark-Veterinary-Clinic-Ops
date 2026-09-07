@@ -1,28 +1,31 @@
 {
   "task_id": "094_idempotent_daily_log_close",
   "name": "veterinary_clinic_system_094_idempotent_daily_log_close",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "idempotency",
-  "surface": "frontend",
-  "instruction": "Close out the boarding day, re-runnable: for every checked_in reservation, ensure there is a boarding_daily_log row for the episode date. If missing, create it with fed_am/fed_pm/medicated/walked all false, notes 'auto-closed <batch_code>', logged_by 'system'. If a row for that reservation+date already exists, leave it completely unchanged. Running twice must create zero new rows the second time.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["idempotency", "workflow", "aggregation"],
+  "surface": "backend",
+  "instruction": "Close out the boarding day, idempotently. For every boarding_reservation with status='checked_in', ensure there is a boarding_daily_log row for the episode date (log_date date prefix == episode date). If missing, create it with fed_am/fed_pm/medicated/walked all false, notes 'auto-closed <batch_code>', logged_by 'system'. If a row already exists for that reservation and episode date, leave it completely unchanged. After closing, create or update exactly one ops_reports row {report: 'boarding_daily_close', batch_code, checked_in: <C>, closed: <N>, preexisting: <P>} where C is the count of checked_in reservations, N is the number of new log rows created this run, and P is the number that already existed. Running twice must create zero new log rows and update the same report row.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "set after live gold measurement in QC session",
+  "par_steps": null,
+  "_par_steps_note": "set after live gold measurement in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_boarding_daily_log"
+    "veterinary_clinic_system_boarding_daily_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Assert one episode-date row per checked_in reservation (exactly); rows that existed in snapshot byte-identical; auto-created rows exact with nonce note; total == 10 + (checked_in count - preexisting episode rows).",
+    "summary": "One boarding_daily_log row for the episode date per checked_in reservation; pre-existing seed log rows byte-identical; new rows have exact fields; exactly one ops_reports boarding_daily_close row for this batch with checked_in, closed in {0, expected_new}, and preexisting matching the seed count for this episode; checked_in count validated by API and SQL.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +34,43 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Assert one episode-date row per checked_in reservation (exactly); rows that existed in snapshot byte-identical; auto-created rows exact with nonce note; total == 10 + (checked_in count - preexisting e"
+        "expect": "One log row per checked_in reservation on episode date; seed logs untouched; one report row upserted by batch_code"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_boarding_reservations",
+        "expect": "checked_in count and expected new log count agree between API and SQL"
       }
     ]
   },
+  "hazards": [
+    "The 5 checked_in boarding_reservations (ids 1-5) span check_in/check_out dates all before the episode date (2026-09-27..2026-10-03). The seed boarding_daily_log has 10 rows for reservations 1-5 on 2026-09-03 and 2026-09-04 (e.g., id 2 reservation 1 log_date 2026-09-04; id 4 reservation 2 log_date 2026-09-04). A solution that uses the build date or a fixed date instead of the episode date will find these older rows and either skip creating the required new rows or update them and break the seed canary.",
+    "There are 43 'reserved' and 92 'checked_out' boarding_reservations; a solution must not create daily log rows for reservations that are not checked_in.",
+    "The natural key for a daily log is (reservation_id, log_date). A blind insert for every checked_in reservation without checking for an existing row for the episode date will create duplicates on rerun.",
+    "The ops_reports boarding_daily_close row must be upserted by batch_code; a solution that pushes a new report row on every run will create duplicates.",
+    "Episode-date comparison must use the 10-char date prefix because log_date values are stored as full ISO timestamps (e.g., '2026-09-30T00:00:00.000Z')."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "boarding daily log close idempotent kennel day sheet veterinary",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Veterinary Boarding Kennel Daily Care and Safety Checklist (popprobe.com)",
+          "Boarding Kennel Daily Care Log — Free Printable PDF (printablemake.com)",
+          "Pet Boarding Facility Daily Care Report Template (paperform.co)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Existence-checked insert (natural key: reservation+date); blind insert fails on duplicates."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary boarding daily log idempotent close reservation episode date benchmark task",
+        "top_results": [
+          "Veterinary Practice Reporting Every Week (digitail.com)",
+          "Veterinary Clinic Compliance Audit Checklist (paperform.co)",
+          "Veterinary Automation Playbook 2026 (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Scales a simple daily log close to 140 reservations with an existence-checked insert keyed by reservation+episode date, idempotent re-run, and an aggregate report. The verifier dual-path counts checked_in reservations and enforces that pre-existing seed logs for different dates are untouched."
   }
 }

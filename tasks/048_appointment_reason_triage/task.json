@@ -1,52 +1,66 @@
 {
   "task_id": "048_appointment_reason_triage",
   "name": "veterinary_clinic_system_048_appointment_reason_triage",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "update",
-  "surface": "websearch",
-  "instruction": "Triage tagging for upcoming visits. For every appointment on or after the episode date with status 'scheduled' or 'confirmed', add a triage_tier field: 'urgent' if the reason mentions vomiting, limping/lameness, or 'ear infection' (case-insensitive); 'routine' if it mentions wellness, vaccine, or weight management; 'standard' for everything else. Pre-episode and historical-status appointments stay untouched.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["update", "aggregation", "reconciliation"],
+  "surface": "backend",
+  "instruction": "Triage-tag upcoming appointments and the open waitlist, then produce a triage summary, all batched under the episode batch code. The triage rules are applied to the free-text reason, case-insensitive: 'urgent' if the reason contains 'vomit', 'limping', 'lameness', or 'ear infection'; 'routine' if it contains 'wellness', 'vaccine', or 'weight management'; 'standard' for everything else. (1) For every appointment with appointment_date >= episode_date and status in ('scheduled', 'confirmed'), add triage_tier using these rules. (2) For every waitlist row with status 'waiting', set triage_tier using the same rules on its reason, and set slot_status to 'booked' if that patient has any scheduled or confirmed appointment with appointment_date >= episode_date; otherwise 'open'. (3) Create exactly one ops_reports row with report='triage_summary', batch_code, and summary = {appt_counts: {urgent: U, routine: R, standard: S}, waitlist_counts: {urgent: Wu, routine: Wr, standard: Ws}, urgent_unbooked: count of waiting waitlist rows with triage_tier='urgent' and slot_status='open'}. Past appointments and appointments with other statuses stay untouched. Existing waitlist rows are updated in place; all other collections stay untouched.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps must be measured against a live container in the QC session; do not set final values without a real gold run.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_appointments"
+    "veterinary_clinic_system_appointments",
+    "veterinary_clinic_system_waitlist",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute expected tier per appointment from snapshot reasons with the documented keyword rules (vomit|limping|lameness|ear infection -> urgent; wellness|vaccine|weight management -> routine; else standard), date>=ep, status in set. Assert tier on exactly those rows; others byte-identical; count 46.",
+    "summary": "Each future scheduled/confirmed appointment gets the correct triage_tier. Each waiting waitlist row gets the correct triage_tier and slot_status (booked iff the patient has a future scheduled/confirmed appointment). Exactly one triage_summary ops_reports row with correct per-tier counts and urgent_unbooked. Dual-path (raw-row Python + SQL) verification of all counts.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute expected tier per appointment from snapshot reasons with the documented keyword rules (vomit|limping|lameness|ear infection -> urgent; wellness|vaccine|weight management -> routine; else sta"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "(see verifier.py)", "expect": "per-row triage_tier and slot_status checks; exact ops_reports summary; untouched non-target rows" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_appointments", "expect": "appt and waitlist tier counts, and urgent_unbooked, agree between raw-row Python and SQL" }
     ]
   },
+  "hazards": [
+    "The waitlist has a seeded 'priority' field that does NOT match the reason-based triage_tier. Row id 2 has priority='urgent' but reason='Anal gland expression' (standard). Row id 6 has priority='routine' but reason='Ear infection re-check' (urgent). A solution that copies the priority field will fail.",
+    "The waitlist also has slot_status hazards: row id 3 (patient 11, Dental prophylaxis consult) and row id 4 (patient 15, Dental prophylaxis consult) both have scheduled/confirmed future appointments in the snapshot (id 546 on 2026-09-30 and id 69 on 2026-09-30), so for episode 2026-09-30 their slot_status must be 'booked'. A solution using requested_date or priority instead of an actual future appointment will set them wrong.",
+    "Stale scheduled/confirmed appointments with dates before the episode date are not tagged. Row id 74 (scheduled, 2026-09-27, Ear infection re-check, provider 3) and row id 60 (scheduled, 2026-09-27, Chronic kidney disease monitoring, provider 2) are before episode 2026-09-30. Even though their reason is urgent/serious, they are in the past and must not receive triage_tier.",
+    "Keyword boundary cases: 'Annual wellness exam' is routine (wellness). 'Annual check' (id 545, scheduled, 2026-09-30) is standard because it does not contain 'wellness'. 'Vaccine boosters due' is routine, 'Vomiting since yesterday' is urgent, 'Chronic kidney disease monitoring' is standard (no keyword match), 'Skin allergy flare-up' is standard, 'Ear infection re-check' is urgent.",
+    "Status filter matters: 'checked_in' rows like id 48 (checked_in, 2026-09-04, Ear infection re-check) are on a past date and have status 'checked_in', not 'scheduled'/'confirmed', so they must not be tagged even though the reason is urgent.",
+    "Idempotency: the triage_summary row must be deleted and rewritten per batch_code so a rerun reaches the same end-state; otherwise duplicate summary rows accumulate."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary appointment triage guidelines urgent vs routine vomiting lameness ear infection",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Urgent Care Triage Chart | Heather Ridge Pet Hospital (heatherridgepet.com)",
+          "BSAVA Triage Guidance (bsava.com)",
+          "Practical Triage Guide (petsure.com.au)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Free-text keyword classification with overlapping semantics ('Ear infection re-check' urgent vs 'Vaccine boosters due' routine); agents misclassify boundary strings."
+    "uniqueness_searches": [
+      {
+        "query": "appointment reason triage waitlist booked slot veterinary RL environment benchmark",
+        "top_results": [
+          "Veterinary Urgent Care Triage Waitlist with Severity Sorting | RationalGo (rationalgo.ai)",
+          "AI Automation for Veterinary Clinics (2026) | A8gent (a8gent.com)",
+          "Veterinary Scheduling & Queue Management Software | WaitWell (waitwellsoftware.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses free-text keyword triage of future appointments with waitlist triage and a real booked-vs-open slot reconciliation, producing a cross-collection summary. The waitlist's existing 'priority' field is a decoy, and the summary's urgent_unbooked metric requires joining waitlist reason triage to appointment existence. No public benchmark combines these three sub-problems with reason-based triage and waitlist slot reconciliation."
   }
 }

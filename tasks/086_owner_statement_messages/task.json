@@ -1,28 +1,31 @@
 {
   "task_id": "086_owner_statement_messages",
   "name": "veterinary_clinic_system_086_owner_statement_messages",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "create",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["create", "aggregation", "report"],
   "surface": "backend",
-  "instruction": "Monthly statements: for every owner whose current balance is greater than 0, push one communications row {channel: 'email', direction: 'outbound', subject: 'Statement ready \u2014 balance $<balance with 2 decimals>', body: 'Your statement for <N> open invoice(s) is ready. Balance $<balance>.', logged_by: 'system', occurred_at: episode timestamp} where N is that owner's count of invoices with status 'sent' or 'overdue' (N may be 0). Owners with zero balance get nothing.",
+  "instruction": "Run the monthly owner statement cycle as of the episode date. For every owner whose current balance is greater than 0, push one email communications row with subject 'Statement ready — balance $<balance with two decimals>' and body 'Your statement for <N> open invoice(s) is ready. Balance $<balance with two decimals>.' where N is the count of that owner's billing_invoices with status 'sent' or 'overdue'. Owners with zero or negative balance get no statement. Additionally, create one ops_reports row report='owner_statements' with the episode batch_code, owners_notified (count), total_balance (sum of notified owners' balances), total_open_invoices (sum of open counts across those owners), and by_owner (JSON object mapping each notified owner_id string to {balance, open_invoices, open_total}, sorted by owner_id ascending). Use live owners and billing_invoices only; do not hardcode counts, balances, or formatting.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_communications"
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute owner balances (live) and open-invoice counts; assert exactly one new row per positive-balance owner with exact subject/body formatting (2-decimal money); total == 16 + K; seeded unchanged.",
+    "summary": "Exactly one new communications row per owner with balance > 0, with exact 2-decimal money formatting and the correct open-invoice count. One ops_reports row report='owner_statements' and batch_code with the exact summary fields and a by_owner JSON mapping each notified owner to their balance, open_invoices, and unpaid open_total. Every numeric aggregate is computed two independent ways (raw-row Python vs SQL) and must agree.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +34,43 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Recompute owner balances (live) and open-invoice counts; assert exactly one new row per positive-balance owner with exact subject/body formatting (2-decimal money); total == 16 + K; seeded unchanged."
+        "expect": "New communications rows and one ops_reports owner_statements row, both derived live from owners and billing_invoices."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "Open-invoice counts, total balance, and by_owner open totals are recomputed by independent SQL GROUP BY and raw-row filter and must agree."
       }
     ]
   },
+  "hazards": [
+    "owner id=2 has billing_invoices id=2 (status='sent', total 214) but owners row id=2 has balance 0.0, so they must NOT receive a statement (zero-balance exclusion decoy).",
+    "owner id=1 has balance 134.0 but billing_invoices id=1 (status='sent', total 523, amount_paid 0). The statement must use the owner balance field (134.00), not the open-invoice total (523.00).",
+    "billing_invoices id=3 (owner_id=3, status='draft', total 546) must NOT count as an open invoice; only 'sent' and 'overdue' statuses count.",
+    "56 owners have positive balances but zero open invoices (e.g., owner id=4 balance 175.0, id=5 balance 412.5, id=10 balance 128.0); the body must read '0 open invoice(s)' with the correct balance.",
+    "Money formatting is two decimal places, e.g., 412.50 for owner id=5 and 128.00 for owner id=10, embedded in both the subject and the body."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice owner statement balance open invoice monthly billing workflow",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Client Statements in Veterinary Practice - AVMA",
+          "Monthly Billing Statements for Veterinary Clinics - VetTriage",
+          "Veterinary Practice Management: Statement Cycles - Vetstoria"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Money formatting embedded in two template spots + zero-balance exclusion + a possibly-zero invoice count."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary statement email open invoice count balance report benchmark task",
+        "top_results": [
+          "Practice Management Statement Generation",
+          "Veterinary Client Statement Automation",
+          "Open Invoice Statement Workflow Benchmark"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines per-owner statement messaging with a nested by_owner JSON report, explicit two-decimal money formatting in two template locations, and a live open-invoice count that can be zero for the majority of positive-balance owners. Dual-path SQL vs raw-row verification on every aggregate."
   }
 }

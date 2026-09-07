@@ -1,28 +1,31 @@
 {
   "task_id": "027_paid_invoice_receipt_log",
   "name": "veterinary_clinic_system_027_paid_invoice_receipt_log",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "create",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["create", "aggregation", "workflow"],
   "surface": "backend",
-  "instruction": "The front desk must log a receipt confirmation for every invoice that was paid this calendar month of the episode date. For each invoice with status 'paid' whose issued_date falls in the same calendar month as the episode date, push one communications row to that invoice's owner: channel='email', direction='outbound', subject='Payment receipt INV-<number>', body='Thank you \u2014 INV-<number> paid in full ($<total with 2 decimals>).', logged_by='Front desk (Main St)', occurred_at on the episode date. One row per invoice. Seeded communications stay untouched.",
+  "instruction": "The front desk must log payment receipt confirmations for all paid invoices whose issued_date falls in the two calendar months immediately preceding the episode month. For example, if the episode date is 2026-09-30, the target months are 2026-08 and 2026-07; if the episode date is 2026-10-01, the target months are 2026-09 and 2026-08. For each matching paid invoice, push one outbound email communications row to that invoice's owner: channel='email', direction='outbound', subject='Payment receipt <invoice_number>', body='Thank you — <invoice_number> paid in full ($<total_amount with 2 decimals>).', logged_by='Front desk (Main St)', occurred_at the episode timestamp, owner_id set to the invoice's owner_id, and patient_id set to the invoice's patient_id. One row per invoice. Also push one ops_reports row with report='receipt_batch' and the live batch_code containing: episode_date, receipt_count, total_receipts_cents, month_breakdown (dict mapping each target month 'YYYY-MM' to the count of receipts in that month), and location_breakdown (dict mapping each location name to the count of receipts from that location). Do not touch any other collection. If a receipt_batch report or payment receipt communications for this batch already exist, overwrite them so the result is idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_communications"
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Expected = paid invoices with dp(issued_date) in episode month (compare 'YYYY-MM' prefix). Assert exactly one new row each with exact subject/body (money formatted with 2 decimals). Total == 16 + E; seeded rows unchanged.",
+    "summary": "The agent creates exactly one ops_reports 'receipt_batch' row and one outbound email communications row per paid invoice whose issued_date month is in the two calendar months immediately preceding the episode month. The receipt subject, body, channel, direction, logged_by, occurred_at, owner_id, and patient_id are exact. The report's receipt_count, total_receipts_cents, month_breakdown, and location_breakdown agree with live data. Every aggregate is computed two independent ways (raw-row Python filter and SQL) and must agree with the agent's written report. All collections outside the blast radius are byte-identical to the seed snapshot.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +33,49 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Expected = paid invoices with dp(issued_date) in episode month (compare 'YYYY-MM' prefix). Assert exactly one new row each with exact subject/body (money formatted with 2 decimals). Total == 16 + E; s"
+        "collection": "veterinary_clinic_system_communications",
+        "expect": "One new 'Payment receipt ...' row per target paid invoice with exact fields; no seeded communication modified"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one 'receipt_batch' row for this batch with live-derived counts, total cents, month_breakdown, and location_breakdown"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "receipt_count, total_receipts_cents, month_breakdown, and location_breakdown agree between raw-row Python and SQL"
       }
     ]
   },
+  "hazards": [
+    "The target window is the two calendar months immediately before the episode month, not the episode month itself and not a rolling 30-day window. At the default episode 2026-09-30 the target months are 2026-07 and 2026-08 (49 paid invoices); at 2026-10-01 they are 2026-08 and 2026-09 (24 paid invoices, because no paid invoices were issued in 2026-09). A solution that uses the current month, a 30-day window, or the previous month only will produce the wrong count.",
+    "Non-paid invoices are decoys: there are 2 'sent' and 1 'draft' invoice. Only rows with status='paid' should generate a receipt. A solution that treats sent/draft as paid will push the wrong communications.",
+    "The receipt body must use exact money formatting with two decimals ($<total:.2f>). The total_amount values in the snapshot are dollars (e.g., 523.0), so the body for INV-1004 must read '$251.00'.",
+    "The occurred_at timestamp must be the episode date. A communication whose occurred_at is the invoice issued_date or a hardcoded date fails.",
+    "If an owner has more than one paid invoice in the window, they must receive one communication per invoice, not one per owner. At this seed volume each target owner has exactly one invoice in the window, but the code must not collapse by owner."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "query": "veterinary payment receipt log paid invoice owner communication",
         "top_results": [
-          "Account for receivables with a written policy - dvm360",
-          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
-          "Effective credit & collection techniques - dvm360"
+          "Invoicing & Payments | ezyVet",
+          "Creating and managing invoices | Lupa Help Center",
+          "iVetData. Veterinary Clinic Management System"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Calendar-month window (not rolling 30 days) + exact money formatting in a string; both are frequent agent errors."
+    "uniqueness_searches": [
+      {
+        "query": "paid invoice receipt batch log communications ops report benchmark",
+        "top_results": [
+          "Bills Receivable Remittance Batch Management Report",
+          "Payment accounting report | Adyen Docs",
+          "Batch Receivables – & EFT - Spire User Manual - 3.11"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgrades a single-month receipt task into a calendar-month catch-up batch with an ops_reports summary, location breakdown, and dual-path verification, while preserving exact message formatting and one-row-per-invoice semantics."
   }
 }

@@ -1,19 +1,21 @@
 {
   "task_id": "078_timezone_safe_daily_census",
   "name": "veterinary_clinic_system_078_timezone_safe_daily_census",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "aggregation",
-  "surface": "websearch",
-  "instruction": "All three clinics operate in the America/New_York timezone (see the locations collection). Using that timezone (verify its UTC offset handling if unsure), compute the daily census: for the EPISODE DATE as seen in America/New_York, one ops_reports row {report: 'daily_census', batch_code, census_date: '<YYYY-MM-DD in ET>', appointments_that_day: <appointments whose appointment_date equals it>, boarding_guests_that_day: <checked_in reservations whose stay covers it (check_in <= date <= check_out)>, new_invoices_that_day: <invoices issued that day>}.",
+  "category": ["aggregation", "reconciliation", "report"],
+  "surface": "backend",
+  "instruction": "All three clinic locations record their timezone as 'America/New_York'. For the episode date (a UTC midnight timestamp stored in ops_meta), derive the calendar date as it would appear on the wall clock in America/New_York using zoneinfo 'America/New_York' and the actual DST rules for late-September 2026 — do not hardcode UTC-4 or UTC-5. Then produce exactly one ops_reports row {report: 'daily_census', batch_code, census_date_utc, census_date_et, appointments_scheduled_et, appointments_confirmed_et, appointments_total_et, appointments_scheduled_naive, appointments_confirmed_naive, appointments_total_naive, boarding_guests_et, boarding_guests_naive, new_invoices_et, new_invoices_naive}. For each of the three categories, compute both (a) the timezone-safe count (convert each stored UTC timestamp to America/New_York and count it if it falls on the ET census date) and (b) the naive count (compare the raw stored 10-character date prefix to the ET census date). Appointments: count only status in ('scheduled','confirmed'). Boarding: count only reservations with status='checked_in' whose stay (check_in <= ET census date <= check_out) covers the ET census date. Invoices: count only invoices whose issued_date falls on the ET census date. Delete any prior daily_census row for this batch before writing. Every number is derived from live data; the verifier recomputes each count via both raw-row Python/zoneinfo and SQL time-zone bounds and the two derivations must agree.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 12,
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
+  "max_steps": null,
+  "_max_steps_note": "set to par_steps * 1.5 after live measurement",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Compute ET date from episode timestamp (UTC-4/EDT in summer; derive via zoneinfo 'America/New_York'); recompute three counts vs that date; assert exact row; nonce.",
+    "summary": "Compute the America/New_York calendar date for the UTC episode timestamp using zoneinfo. Recompute timezone-safe and naive counts for scheduled/confirmed appointments, checked-in boarding guests whose stay covers the ET census date, and invoices issued on the ET census date. Write one ops_reports row with all 14 numeric/date fields. Verifier asserts the row via dual-path (Python zoneinfo vs SQL UTC bounds) and canaries every collection outside ops_reports.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +32,52 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Compute ET date from episode timestamp (UTC-4/EDT in summer; derive via zoneinfo 'America/New_York'); recompute three counts vs that date; assert exact row; nonce."
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "exactly one daily_census row for the batch with the 14 fields and the correct ET/naive counts"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_appointments",
+        "expect": "appointment counts agree between raw-row Python/zoneinfo and SQL UTC-bound queries, both ET and naive"
       }
     ]
   },
+  "hazards": [
+    "Timezone day shift: the episode timestamp is a UTC midnight (e.g. 2026-09-30T00:00:00.000Z), which in America/New_York during DST is 20:00 of the previous day. For episode 2026-09-30 the ET census date is 2026-09-29. Raw appointment_date 2026-09-29 rows (ids 66,115,205,247,291,345,373,400,431,459,483,507,508,524) convert to ET 2026-09-28, while raw 2026-09-30 rows (ids 69,112,125,160,211,295,304,315,339,352,408,449,469,519,543,545,546,547,548) convert to ET 2026-09-29. A naive count for 2026-09-29 using raw date prefixes returns scheduled=10/confirmed=4; the correct ET count is scheduled=13/confirmed=6.",
+    "Zero-count traps: the only checked_in boarding reservations are ids 1-5 with check_out on or before 2026-09-09 (id 1 check_out 2026-09-09, id 5 check_out 2026-09-07), and the newest invoice is id 3 with issued_date 2026-09-02. Because the episode jitters around 2026-09-30 (±3 days), the ET census date is always 2026-09-27..2026-10-02, so both boarding_guests and new_invoices are 0. A solution that ignores the date range and counts all checked_in reservations or all invoices overreports.",
+    "Status filter: appointments have statuses no_show (66 rows), completed (176 rows), checked_in (10 rows), scheduled (205 rows) and confirmed (91 rows). Only scheduled and confirmed count toward the census.",
+    "All locations America/New_York: snapshot rows veterinary_clinic_system_locations ids 1, 2 and 3 all have timezone='America/New_York'.",
+    "Date format: all business dates in the snapshot are stored as ISO-with-time (e.g. '2026-09-30T00:00:00+00:00'); a bare '2026-09-30' string would persist as NULL in this Stackhouse build."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "America/New_York UTC offset daylight saving time 2026 September timezone",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Time Zone & Clock Changes in New York, New York, USA (timeanddate.com)",
+          "America/New_York — IANA Time Zone Identifier · UTC-04:00 (timezone.io)",
+          "America/New_York Time Zone | Offset, DST, and Current Time (datetimeconverter.com)"
+        ]
+      },
+      {
+        "query": "veterinary clinic daily census report appointments boarding guests invoices",
+        "top_results": [
+          "Using the Census | DaySmart Vet Help Center (help.vettersoftware.com)",
+          "Boarding | DaySmart Vet Help Center (help.vettersoftware.com)",
+          "Boarding and Grooming User Guide (software.idexx.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Timezone conversion (UTC episode instant -> ET calendar date) before date equality \u2014 agents compare in UTC and miss boundary rows."
+    "uniqueness_searches": [
+      {
+        "query": "timezone safe daily census naive vs converted appointment counts veterinary benchmark",
+        "top_results": [
+          "How to Use Veterinary Practice Reporting Every Week (digitail.com)",
+          "Veterinary Clinic Compliance Audit Checklist Template (paperform.co)",
+          "Veterinary Automation Playbook 2026 (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Forces a timezone conversion (UTC episode instant -> America/New_York calendar day) before any date equality, and then requires both the correct timezone-safe count and the wrong naive count in the same report. The dual-path verifier recomputes each number with raw-row zoneinfo and SQL UTC bounds. At 10x appointment volume the day-shift boundary contains a real set of rows (2026-09-29 vs 2026-09-30) that produces a plausible-but-wrong naive count, rather than an obviously-broken zero."
   }
 }

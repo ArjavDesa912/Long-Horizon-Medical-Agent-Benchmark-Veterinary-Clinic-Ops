@@ -1,53 +1,67 @@
 {
   "task_id": "060_geriatric_panel_recall",
   "name": "veterinary_clinic_system_060_geriatric_panel_recall",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "workflow",
+  "category": ["workflow", "aggregation", "reconciliation"],
   "surface": "websearch",
-  "instruction": "Geriatric screening recall: dogs and cats aged 7 years or older (as of the episode date, computed from dob) who have NOT had a 'CBC' or 'Serum chemistry panel' lab result in the last 365 days are due for senior bloodwork (standard senior-wellness practice \u2014 verify if unsure). For each due patient push one reminder_queue row {kind: 'senior_lab_recall', patient_id, owner_id: <patient's owner>, message: '<PatientName> (age <age in whole years>) is due for senior bloodwork \u2014 CBC + chemistry.', status: 'queued', queued_by: 'system', queued_at: episode timestamp, due_date: episode date}. Then push ONE communications summary row to owner of the clinic (owner_id '1'): {channel: 'email', direction: 'outbound', subject: 'Senior recall batch <batch_code>', body: '<N> senior patients recalled for bloodwork.', logged_by: 'system', occurred_at: episode timestamp}. Seeded rows untouched.",
+  "instruction": "Run the monthly senior bloodwork recall for the practice. A canine or feline patient is due for a geriatric panel (CBC + serum chemistry) when they are at least 7 years old as of the episode date AND have not had a qualifying lab ('CBC' or 'Serum chemistry panel') resulted within the previous 365 days. For each due patient, push one reminder_queue row: {kind: 'senior_lab_recall', patient_id, owner_id, message: '<Name> (age <age in whole years>) is due for senior bloodwork \u2014 CBC + chemistry.', status: 'queued', queued_by: 'system', queued_at: episode timestamp, due_date: episode date, recall_batch: <batch_code>}. Push one communications summary to owner id '1': subject 'Senior recall batch <batch_code>', body '<N_canine> canine and <N_feline> feline patients were recalled for senior bloodwork (<N_excluded> excluded by recent lab).'. Push ops_reports rows for report='senior_lab_recall' and this batch: one per due species plus an 'ALL' rollup, each with {species, senior_count, recent_lab, due, recall_rate} computed from live data. Append one audit_log row: {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'SENIOR_RECALL_SWEEP', target_collection: 'reminder_queue', target_id: <batch_code>, details: 'Senior recall sweep <batch_code>: <N_due> due patients.', occurred_at: episode timestamp}. Do not process non-canine/feline patients, do not touch seeded reminder_queue rows, and make the whole sweep idempotent so a re-run reaches the same end-state.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 14,
+  "max_steps": null,
+  "par_steps": null,
+  "_par_steps_note": "placeholder -- measure via live gold run in QC session",
+  "_max_steps_note": "placeholder -- set to roughly par_steps * 1.5 after live measurement",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
     "veterinary_clinic_system_reminder_queue",
-    "veterinary_clinic_system_communications"
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Recompute: canine/feline patients with (ep - dob).days >= 7*365 (age in whole years via date arithmetic); exclude those with a lab_results row test_name in ('CBC','Serum chemistry panel') and resulted within 365d of ep. Assert exact per-patient rows (message age must match whole-year age at ep) + one summary row with N == created count; totals exact; seeded untouched.",
+    "summary": "Compute the set of due canine/feline patients from live patients and lab_results using the 7*365 age threshold and the 365-day lab recency window. Exactly one new senior_lab_recall reminder_queue row per due patient, keyed by (patient_id, recall_batch). Exactly one summary communications row to owner 1 with exact counts. ops_reports holds one senior_lab_recall row per due species plus an ALL rollup; every aggregate (senior_count, recent_lab, due, recall_rate) is recomputed via two independent paths (Python filter and SQL) and must agree with each other and with the written rows. One SENIOR_RECALL_SWEEP audit_log row. All non-canine/feline senior patients and seeded collections outside the blast radius remain untouched.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute: canine/feline patients with (ep - dob).days >= 7*365 (age in whole years via date arithmetic); exclude those with a lab_results row test_name in ('CBC','Serum chemistry panel') and resulted"
-      }
+      {"type": "canary_hash", "collections": "all seeded collections outside blast_radius"},
+      {"type": "derived_rows", "collection": "reminder_queue, ops_reports, audit_log, communications", "expect": "counts and row content match the live recomputation"},
+      {"type": "dual_path", "collection": "veterinary_clinic_system_patients / veterinary_clinic_system_lab_results", "expect": "due counts per species and total agree between Python filter and SQL"}
     ]
   },
+  "hazards": [
+    "non-canine/feline seniors are a decoy set: the snapshot contains 25 non-canine/feline patients at least 7 years old (e.g., id 7 Ziggy avian, id 10 Willow equine, id 54 Penny exotic, id 31 Oliver avian, id 35 Loki equine); a species-blind age filter would over-recall these.",
+    "recent-senior-lab exclusion: 7 canine/feline patients are at least 7 years old but have a qualifying CBC or chemistry panel within 365 days of the episode date (e.g., id 53 Molly canine last Serum chemistry panel 2026-01-27, id 59 Molly feline last CBC 2026-05-17, id 232 Bailey feline last CBC/chemistry 2026-07-27); recalling them would over-notify.",
+    "episode-date boundary sensitivity: the due set must use (episode_date - dob).days >= 2555 and 0 <= (episode_date - resulted_at).days <= 365; the set is stable across the +/-3-day episode jitter, but an off-by-one boundary would silently change counts.",
+    "idempotency on re-run: the sweep's own reminder_queue rows are keyed by recall_batch and patient_id; a naive second run must not duplicate reminders, double-count the summary, or create duplicate audit/ops_reports rows.",
+    "multi-pet name collision: multiple due patients share common names (e.g., two 'Molly' entries), so matching reminders by patient_id, not by message text, is required."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "AAHA senior wellness guidelines canine feline geriatric bloodwork CBC chemistry panel 7 years",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "2022 AAHA Canine Life Stage Guidelines (aaha.org)",
+          "AAFP Senior Care Guidelines for Cats (catvets.com)",
+          "WSAVA Vaccination and Geriatric Screening Guidelines (wsava.org)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Age derivation from dob + negative-evidence join (no recent lab) + summary-count consistency; three ways to be subtly wrong."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary practice senior bloodwork recall automated reminder queue species-specific report",
+        "top_results": [
+          "How to Automate Senior Wellness Reminders in Your Practice (digitail.com)",
+          "Veterinary Recall Systems: Geriatric Screening Best Practices (vetstoria.com)",
+          "Practice Management Reports: Compliance by Species (ezyvet.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses a senior-wellness recall, a species-specific compliance report, and an audit trail into one mission; the due set is derived from a negative-evidence join against lab_results and must be stable across episode-date jitter and idempotent re-runs."
   }
 }

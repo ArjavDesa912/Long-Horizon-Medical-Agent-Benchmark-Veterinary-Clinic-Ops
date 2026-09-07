@@ -1,52 +1,76 @@
 {
   "task_id": "064_microchip_format_audit",
   "name": "veterinary_clinic_system_064_microchip_format_audit",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "repair",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["repair", "aggregation", "reconciliation"],
   "surface": "websearch",
-  "instruction": "Audit microchip registrations against ISO 11784 (15 numeric digits \u2014 verify online if unsure). For every patient whose microchip_id is missing, null, or not exactly 15 digits, set microchip_flag='non_compliant' and microchip_flagged='<batch_code>'. Compliant patients stay byte-identical; do not invent new chip numbers.",
+  "instruction": "Audit microchip registrations against ISO 11784 (15 decimal digits \u2014 verify online if unsure). For every patient whose microchip_id is missing, null, or not exactly 15 digits, set microchip_flag='non_compliant' and microchip_flagged='<batch_code>' on the patient record (do not invent new chip numbers). For each non-compliant patient, also push one reminder_queue row {kind: 'microchip_recall', patient_id, owner_id, message: '<Name>: microchip <chip> is not ISO 11784 compliant \u2014 please update.', status: 'queued', queued_by: 'system', queued_at: episode timestamp, due_date: episode date, recall_batch: <batch_code>}. Push one ops_reports row per species present plus an 'ALL' rollup {report: 'microchip_audit', batch_code, species, total, non_compliant, compliant, compliance_pct}. Append one audit_log row {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'MICROCHIP_AUDIT', target_collection: 'patients', target_id: 'ALL', details: 'Microchip audit <batch_code>: <non_compliant> non-compliant of <total> patients.', occurred_at: episode timestamp}. Send one communications summary to owner id '1' with subject 'Microchip audit <batch_code>' and body '<non_compliant> of <total> patients have non-compliant microchips as of <episode date>.' Make the audit idempotent; do not touch seeded reminder_queue rows.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "par_steps": null,
+  "_par_steps_note": "placeholder -- measure via live gold run in QC session",
+  "_max_steps_note": "placeholder -- set to roughly par_steps * 1.5 after live measurement",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_patients"
+    "veterinary_clinic_system_patients",
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_communications"
   ],
   "success_criteria": {
-    "summary": "From snapshot: patients failing regex ^\\d{15}$ -> flagged with nonce; others byte-identical; count 30.",
+    "summary": "Every patient with a non-15-digit microchip is flagged. There is exactly one microchip_recall reminder per non-compliant patient keyed by (patient_id, recall_batch). ops_reports contains one microchip_audit row per species plus ALL with correct counts. One MICROCHIP_AUDIT audit row and one communications summary. All aggregates are verified via Python and SQL dual paths. No other collections are modified.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: patients failing regex ^\\d{15}$ -> flagged with nonce; others byte-identical; count 30."
-      }
+      {"type": "canary_hash", "collections": "all seeded collections outside blast_radius"},
+      {"type": "derived_rows", "collection": "patients, reminder_queue, ops_reports, audit_log, communications", "expect": "non-compliant patients flagged; reminders, report, audit, and comm counts and content match live recomputation"},
+      {"type": "dual_path", "collection": "veterinary_clinic_system_patients", "expect": "per-species and total microchip counts agree between Python regex and SQL regex"}
     ]
   },
+  "hazards": [
+    "all-300-non-compliant: the snapshot has 299 patients with exactly 12-digit microchips (e.g., patient 1 '985112100000') and patient 30 with 11 digits ('98511232965'). A solution that flags only null/missing chips does nothing and fails.",
+    "do-not-invent: compliant chips would be 15 digits, but the agent must not generate new microchip_id values for existing patients; only the flag fields may be written.",
+    "species distribution: the non-compliant set spans all five species (canine, feline, avian, exotic, equine), so the per-species ops_reports rows must be derived from live data, not hardcoded.",
+    "idempotency: the 300 patient updates and 300 reminders must not duplicate on re-run; reminders and report are keyed by batch.",
+    "transferred-status decoy: patient 27 (Poppy) has status 'transferred' but still must be audited and flagged; status is not a filter."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "ISO 11784 pet microchip 15 digit format country code 985 manufacturer",
+        "query": "ISO 11784 pet microchip 15 digit format manufacturer code 985",
         "top_results": [
           "Manufacturer's ISO Codes (Alberta Animal Health Source PDF)",
           "ISO 11784:2024 Code structure (ISO preview)",
           "Microchipping - The Importance of ISO (WSAVA PDF)"
         ]
+      },
+      {
+        "query": "veterinary practice microchip audit compliance reminder queue all patients flag non-compliant",
+        "top_results": [
+          "Microchip Audit and Client Recall Workflows (aaha.org)",
+          "Compliance Monitoring for Veterinary Microchips (digitail.com)",
+          "ISO Microchip Format Checks in Practice Software (ezyvet.com)"
+        ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Format validation from an external standard; flag-without-inventing is the discipline under test."
+    "uniqueness_searches": [
+      {
+        "query": "RL environment microchip format audit flag all patients species report audit log",
+        "top_results": [
+          "Veterinary clinic benchmark microchip audit (github.com)",
+          "Long-horizon agent task: bulk flag + recall + report (paperform.co)",
+          "Multi-collection audit and reminder task (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "A full-fleet microchip audit that flags every existing patient as non-compliant, enqueues one recall reminder per patient, produces species-level compliance reports, and records audit/communication artifacts. The 'do not invent new chips' discipline and bulk volume make it a hard repair task."
   }
 }

@@ -1,28 +1,28 @@
 {
   "task_id": "070_owner_lifetime_value_report",
   "name": "veterinary_clinic_system_070_owner_lifetime_value_report",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "aggregation",
+  "category": ["aggregation", "reconciliation", "finance"],
   "surface": "backend",
-  "instruction": "Rank the client base. One ops_reports row per owner: {report: 'owner_ltv', batch_code, owner_id, owner_name, lifetime_revenue: <sum of amount_paid over the owner's PAID invoices, dollars>, open_balance: <sum of (total-paid) over sent/overdue invoices, dollars>, invoice_count: <all non-draft invoices>, pet_count: <patients linked to the owner>}. Include ALL owners, even zeros. Additionally create one row {report: 'owner_ltv_top', batch_code, owner_id, owner_name, lifetime_revenue} for the owner with the highest lifetime_revenue (tie -> lowest owner id).",
+  "instruction": "Produce the monthly owner financial report and the open-AR reconciliation for the practice, batched under the episode batch code in ops_reports. The owners.balance column is a stored cache and is NOT authoritative for open AR — many clients have a balance value that does not match what the invoice ledger says they owe; you must derive every financial number from billing_invoices and the patients roster, not from owners.balance. Create one ops_reports row with report='owner_ltv' for every owner in the system (all 220 owners, even if they have no pets or no invoices): {batch_code, owner_id, owner_name, lifetime_revenue, open_balance, invoice_count, pet_count, ar_current, ar_1_30, ar_31_60, ar_61_plus}. lifetime_revenue = sum of amount_paid over that owner's paid invoices. open_balance = sum of (total_amount - amount_paid) over sent or overdue invoices. invoice_count = count of all non-draft invoices for that owner (draft invoices are not billed yet and count toward nothing). pet_count = patients linked to that owner. The ar_* fields split open_balance into days-past-due buckets relative to the episode date (due_date vs episode date): ar_current for invoices not yet due or due on/after the episode date, ar_1_30 for 1-30 days past due, ar_31_60 for 31-60 days, ar_61_plus for 61+ days; the four buckets must sum to open_balance. Then create one report='owner_ltv_top' row {batch_code, owner_id, owner_name, lifetime_revenue} for the owner with the highest lifetime_revenue (tie broken by lowest owner_id). Finally create one report='owner_ar_reconciliation' row {batch_code, discrepancy_count, total_discrepancy} where discrepancy_count is the number of owners whose owners.balance does not equal the invoice-derived open_balance and total_discrepancy is the sum of absolute differences. No collection outside ops_reports may be modified.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 13,
+  "max_steps": null,
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
+  "_max_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
-  "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
-  ],
+  "blast_radius": ["veterinary_clinic_system_ops_reports"],
   "success_criteria": {
-    "summary": "Recompute per owner from live invoices + patients; assert 22 rows + 1 top row; cents-exact; top row matches argmax with tiebreak; nonce.",
+    "summary": "Recompute per-owner LTV, open AR, invoice count, pet count, and AR aging buckets from live invoices + patients (never owners.balance); exactly one owner_ltv row per owner, one owner_ltv_top row (highest LTV, tie -> lowest owner_id), and one owner_ar_reconciliation row (count + total absolute discrepancy between owners.balance and open_balance). All monetary values cents-exact; every derived aggregate verified by both a raw-row Python pass and an independent SQL pass which must agree with each other and with the written rows.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +31,43 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Recompute per owner from live invoices + patients; assert 22 rows + 1 top row; cents-exact; top row matches argmax with tiebreak; nonce."
+        "expect": "see summary above"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "lifetime_revenue, open_balance, invoice_count and each ar_* bucket computed by a raw-row filter and by SQL aggregation must agree"
       }
     ]
   },
+  "hazards": [
+    "owners.balance is a stale cache and disagrees with invoice-derived open AR for 58 owners; e.g. owner id=1 Margaret Whitfield has balance 134.00 but invoice id=1 (INV-1001, status 'sent', total 523.00, paid 0) leaves open AR 523.00; owner id=4 Carlos Mendoza has balance 175.00 but no open invoices; owner id=21 Eugene Kim has balance -45.00. Copying owners.balance into open_balance produces wrong values for most owners.",
+    "Invoice id=3 (INV-1003, owner_id 3, status 'draft', total 546.00) must not be counted in invoice_count, lifetime_revenue, open_balance, or any AR bucket — only non-draft invoices are billed.",
+    "Only two invoices are open in the seed: invoice id=1 (owner 1, sent, due_date 2026-08-21, 523.00 unpaid) and invoice id=2 (owner 2, sent, due_date 2026-09-20, 214.00 unpaid). The AR bucket each lands in depends on the episode date, which jitters +/-3 days per episode, so the bucket amounts are non-constant and must be derived live.",
+    "55 owners have zero pets (e.g. owner id=23 Jeffrey Robinson, who still has lifetime_revenue 1521.00). pet_count must be 0 for them, not dropped from the report.",
+    "The top owner is id=35 Carol Perez with lifetime_revenue 1970.00; the next owners are id=23 (1521.00), id=13 (1485.00), id=22 (1384.00). An agent that forgets the tie-break ordering or includes drafts computes the wrong top row."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice owner lifetime value AR aging report",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Aging & Client Statements Report — DaySmart Vet",
+          "FAQs: Aged accounts receivable and finance charges — IDEXX Neo",
+          "Account Receivables & Accounts Receivable Reconciliation Reports — DaySmart Vet"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Full-coverage aggregation (zeros included) + a separate argmax row with tiebreak; agents drop zero-owners or mis-tie-break."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary owner lifetime value AR aging reconciliation benchmark task",
+        "top_results": [
+          "Learn to Manage Your Accounts Receivable — Today's Veterinary Business",
+          "Rethinking the Zero A/R Mindset in Veterinary Medicine — VetBilling",
+          "Veterinary Practice Benchmarking Guide — veterinarybusinessguide.com"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses owner LTV ranking with open-AR aging and a reconciliation of the stale owners.balance cache against the invoice ledger; requires computing buckets from a per-episode jittered date, handling zero-pet owners, and dual-path verification of every aggregate."
   }
 }

@@ -1,52 +1,65 @@
 {
   "task_id": "050_schedule_density_rebalance",
   "name": "veterinary_clinic_system_050_schedule_density_rebalance",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "workflow",
+  "category": ["workflow", "reconciliation", "idempotency"],
   "surface": "backend",
-  "instruction": "Balance the books at location 1. Find the future date (on/after episode date) with the most scheduled-or-confirmed appointments at location 1 \u2014 the 'overloaded' day (tie -> earliest date). If that day has strictly more than 4 such appointments, move its LATEST-starting scheduled appointment to the future date at location 1 with the FEWEST scheduled-or-confirmed appointments (tie -> earliest date), keeping the same start_time/end_time/room, and set rebalanced='<batch_code>' on the moved row. If no day exceeds 4, change nothing and instead create an ops_reports row {report: 'rebalance', batch_code, moved: 0}.",
+  "instruction": "Run the practice-wide schedule density rebalance under this episode's batch code (read batch_code and episode_date from the ops_meta row with meta_key='episode_state'). Work per location, independently — locations 1, 2, and 3 — and decide every location from the same pre-move snapshot of the appointments table; do not recompute densities after applying a move. For each location: bucket every appointment whose appointment_date falls on or after the episode date AND whose status is 'scheduled' or 'confirmed', grouped by calendar day (a day only enters the buckets if it holds at least one such appointment). The location's busiest bucketed day is 'overloaded' only when it holds strictly more than 4 of those appointments. If overloaded: among that day's rows with status 'scheduled' only — 'confirmed' rows count toward density but are never the row that moves — take the one with the latest start_time (ties on start_time go to the lowest appointment id) and set its appointment_date to the location's sparsest bucketed day — the qualifying future day with the fewest scheduled-or-confirmed appointments (ties go to the earliest date) — keeping start_time, end_time, room, status, patient_id, provider_id and every other field, and stamp rebalanced='<batch_code>' on the moved row. If the overloaded day somehow contains no 'scheduled' row at all, treat the location as not rebalancable and take the no-op branch below. If a location is not overloaded — including when it has no qualifying future days at all — move nothing there and instead push exactly one ops_reports row: {report:'rebalance', batch_code:<batch_code>, location_id:<location id>, moved:0}. Do not touch appointments dated before the episode date, do not touch rows whose status is anything other than 'scheduled'/'confirmed', and do not create or delete any other rows anywhere.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 50,
-  "par_steps": 14,
+  "par_steps": null,
+  "max_steps": null,
+  "_par_steps_note": "Intentionally unset — measure real gold API-call count via a live gold run in the QC session (codegen-only pass).",
+  "_max_steps_note": "Intentionally unset — set to roughly par_steps * 1.5 in the QC session per the anti-brute-force rule.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_appointments"
+    "veterinary_clinic_system_appointments",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Replay the rule from snapshot: compute overloaded day, sparsest day; if triggered, assert exactly one row differs (moved to expected date, tagged nonce) and all else byte-identical; else assert the no-op report row exists and appointments unchanged.",
+    "summary": "Verifier replays the rule from the seed snapshot per location: each location's overloaded day (>4 scheduled/confirmed future appointments, day-tie -> earliest) and sparsest bucketed day (fewest, day-tie -> earliest) are derived, the move is simulated, then post-move per-day density per location is checked three ways (expected-from-seed, REST-filtered live, SQL GROUP BY live) which must all agree. Each triggered location must show exactly one appointment differing from seed — the expected row, retargeted to the expected day, stamped rebalanced=batch_code, all other fields byte-identical — and zero ops_reports 'rebalance' rows; each non-triggered location must show zero appointment changes and exactly one ops_reports row {report:'rebalance', batch_code, location_id, moved:0}. All other appointment rows byte-identical, appointment id set unchanged, and every collection outside the blast radius canary-hashed unchanged.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Replay the rule from snapshot: compute overloaded day, sparsest day; if triggered, assert exactly one row differs (moved to expected date, tagged nonce) and all else byte-identical; else assert the no"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "(see verifier.py)", "expect": "see summary above" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_appointments", "expect": "post-move per-day scheduled/confirmed counts per location agree between a raw-row Python filter and an independent SQL GROUP BY/COUNT query, and both agree with the seed-simulated expectation" }
     ]
   },
+  "hazards": [
+    "Same-start-time tie with a status decoy: on 2026-10-04 at location 2, appointments id=38 and id=200 are both status='scheduled' at start_time 16:00 while id=128 is 'confirmed' at the same 16:00 — id=128 counts toward that day's density but must never be moved, and the start_time tie between 38 and 200 resolves to the lowest id (38); moving 200 or 128 fails the moved-row identity check.",
+    "Past-window and cross-location decoys: appointment id=23 (location 2, 2026-08-25, status 'no_show') is a double decoy — past-dated relative to the episode window and a non-qualifying status; relative to ep=2026-09-30 there are 72 past-dated scheduled/confirmed location-1 rows and 36 future scheduled/confirmed rows at locations 2 and 3 that bait an over-broad filter.",
+    "Conditional branch flips under episode jitter: for ep in 2026-10-01..2026-10-03, location 1's busiest day has exactly 4 qualifying appointments (e.g., 2026-10-01 holds exactly ids 436, 442, 472, 544) and location 3's busiest is 3 — both must take the no-op report branch; a '>=4' or 'always move' solution fails on those episodes, while location 2 triggers on all seven possible episode dates.",
+    "Wrong-row-on-the-right-day: location 1's 2026-09-30 bucket holds 11 qualifying rows — confirmed id=112 (14:30) and id=211 (10:00) plus scheduled ids 295 (15:30), 352 (15:00), 160 (14:30), 304 (14:00), 548 (13:00) and others — the moved row must be 295, not the merely-late 352 or the confirmed 112.",
+    "Idempotency trap: on a re-run the moved row already sits on the sparsest day carrying rebalanced=<batch_code>, and the post-move snapshot would name a different 'latest scheduled' row (e.g., 352) as the next candidate — the rebalanced=<batch_code> stamp is the only safe re-run marker, and a missing or wrong stamp fails both the tag count and the row-identity checks."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary appointment scheduling overload rebalance policy clinic capacity per day",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Veterinary Clinic Staff Scheduling Best Practices (xshift.ai) — reserve 15-20% of daily capacity as buffer/urgent slots",
+          "How to Manage Appointment Scheduling in a Busy Veterinary Clinic (veterical.com) — utilization monitoring and scheduling imbalance",
+          "Preblocked scheduling that ends daily chaos (dvm360.com) — 4-6 urgent care slots per doctor-day"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Two arg-extremes with deterministic tiebreaks and a conditional no-op branch \u2014 agents must evaluate the guard, not assume it fires."
+    "uniqueness_searches": [
+      {
+        "query": "RL benchmark task appointment schedule density rebalance multi-location conditional no-op report",
+        "top_results": [
+          "No public benchmark task found combining per-location two-arg-extreme scheduling with a conditional no-op report branch",
+          "Calendar/scheduling benchmarks found were single-resource booking tasks, not density-driven relocation",
+          "Practice-management load-balancing features documented (ezyVet, Cornerstone) but none as an evaluatable end-state task"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgrades v1's single-location move into a three-location independent decision where the trigger branch itself varies per location and per episode (location 2 always triggers; locations 1 and 3 flip to the no-op report branch for later episode dates in the ±3-day jitter window). Dual-path density verification (REST aggregation vs SQL GROUP BY) plus a simulated post-move expectation closes 'move any late row' and 'write the report anyway' hacks, and the rebalanced=batch stamp enforces re-run idempotency."
   }
 }

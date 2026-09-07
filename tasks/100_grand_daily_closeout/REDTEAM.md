@@ -1,17 +1,20 @@
-# 100_grand_daily_closeout — REDTEAM notes
+# 100_grand_daily_closeout — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-The full end-of-day closeout the practice manager runs, batched under the episode batch code: (1) reflag invoices: 'sent' with due_date strictly before the episode date become 'overdue'; (2) flush the queue: every reminder_queue row with status 'queued' becomes 'sent' with sent_on = episode date; (3) close the boarding day: for each checked_in reservation ensure an episode-date boarding_daily_log row exists (create with all care booleans false, notes 'closeout <batch_code>', logged_by 'system' if missing; leave existing rows alone); (4) write the summary: one ops_reports row {report: 'daily_closeout', batch_code, invoices_flagged: <count changed in step 1>, reminders_sent: <count changed in step 2>, boarding_rows_created: <count created in step 3>, episode_date: '<YYYY-MM-DD>'}; (5) one audit_log row {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'DAILY_CLOSEOUT', target_collection: 'ops_reports', target_id: 'daily_closeout', details: 'Closeout <batch_code>: <invoices_flagged>i/<reminders_sent>r/<boarding_rows_created>b', occurred_at: episode timestamp}.
+Run the grand end-of-day closeout for the practice: convert accepted estimates into sent invoices, reflag sent invoices whose due date is past the episode date as overdue, flush all queued reminders, create missing boarding daily logs for checked-in reservations, write a summary `ops_reports` row, and append a `DAILY_CLOSEOUT` audit row. Every count in the summary and audit must agree with the live-derived totals.
 
 ## Why this is hard / unique
-Five-phase composite where the summary/audit rows must agree with the actual mutations (self-consistency), plus idempotent boarding upsert — the capstone.
+- **Six-step composite workflow**: touches `billing_estimates` (read), `billing_invoices` (insert + update), `reminder_queue` (update), `boarding_daily_log` (upsert), `ops_reports`, and `audit_log`.
+- **Idempotent counts**: the summary numbers are derived from the pre-episode state (accepted estimates, sent/overdue invoices with due<ep, queued reminders, checked-in reservations minus preexisting episode logs) so a second run reaches the same report even after rows have changed.
+- **Multiple decoy rows**: accepted vs. sent/declined/draft estimates, draft vs. sent/paid invoices, queued `boarding_checkin` vs. `vaccination_due` reminders, existing vs. missing daily logs.
+- **Self-consistency verification**: the `ops_reports` and `DAILY_CLOSEOUT` audit numbers are checked against independent SQL and raw-row recomputations.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- `billing_estimates`: 20 accepted rows (ids 5,6,15,16,25,26,35,36,45,46,55,56,65,66,75,76,85,86,95,96); 80 non-accepted rows.
+- `billing_invoices`: id=1 and id=2 are `status='sent'` (due 2026-08-21 and 2026-09-20); id=3 is `status='draft'`.
+- `reminder_queue`: id=1,2 queued `vaccination_due`; id=4 queued `boarding_checkin`; id=3 `sent` `invoice_overdue`.
+- `boarding_reservations`: id=1-5 are `checked_in`; id=6-140 are `reserved` or `checked_out`.
+- `boarding_daily_log`: rows 1-10 cover reservations 1-5 on `2026-09-03` and `2026-09-04`.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

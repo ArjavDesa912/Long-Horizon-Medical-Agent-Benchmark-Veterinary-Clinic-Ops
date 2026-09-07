@@ -1,52 +1,65 @@
 {
   "task_id": "098_negative_balance_underflow",
   "name": "veterinary_clinic_system_098_negative_balance_underflow",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "repair",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["repair", "reconciliation", "workflow"],
   "surface": "backend",
-  "instruction": "Balances must never be negative (a credit is stored as a separate adjustment, not a negative balance). Find owners with balance < 0, move the negative amount into a new field credit_balance (positive number), set balance to 0, and tag them credit_fixed='<batch_code>'. Non-negative owners stay byte-identical.",
+  "instruction": "Run the client-credit underflow repair. In this practice a client credit is never stored as a negative balance; it is stored as a positive `credit_balance` with the regular `balance` zeroed. Audit the owners, find any account whose balance has fallen below zero, move the underflow amount into a positive `credit_balance`, set `balance` to 0, and tag the owner `credit_fixed` with the episode batch code. For each repaired owner, append an `audit_log` row under actor 'Dana Whitaker' (org_admin), action 'CREDIT_BALANCE_FIX', targeting that owner. Then write a single `ops_reports` row `report='credit_balance_fix'` with the batch code, the number of owners fixed, and the total credit moved. Non-negative owners must remain byte-identical, and the credit amount must be exact to the cent. Derive the repair set and totals from live data, not from any manifest.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_owners"
+    "veterinary_clinic_system_owners",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: negative-balance owners -> balance 0, credit_balance == -old (cents), tag nonce; others byte-identical; count 22.",
+    "summary": "Owners with seed balance < 0 end with balance 0, credit_balance = -old balance (cents-exact), and credit_fixed = batch. Each repaired owner gets one audit_log row (actor Dana Whitaker, action CREDIT_BALANCE_FIX, target owner). Exactly one ops_reports row (report=credit_balance_fix, batch_code) records owners_fixed and total_credit. Non-negative owners and all collections outside the blast radius are byte-identical. All derived aggregates are computed two independent ways (API filter vs SQL COUNT/SUM) and must agree.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: negative-balance owners -> balance 0, credit_balance == -old (cents), tag nonce; others byte-identical; count 22."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_owners", "expect": "negative-balance owners fixed; non-negative owners untouched" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_owners", "expect": "negative-owner count and total credit agree between raw-row filter and SQL COUNT/SUM" }
     ]
   },
+  "hazards": [
+    "Row-level underflow scope: owner id=21 (full_name 'Eugene Kim') is the only owner with balance < 0 (-45.0) in the 220-row seed snapshot. Owners id=2, 3, 6, 7, and 8 are confirmed examples with balance exactly 0.0. A solution that modifies any owner with balance >= 0 fails the per-owner row-eq canary.",
+    "Cents precision: owner balance is a dollars-and-cents float (e.g., -45.0 and 412.5 appear in the snapshot). credit_balance must be the positive equivalent with cent precision; converting to an integer, truncating decimals, or failing to flip the sign is an off-by-value failure.",
+    "No external overpayment source: across all 260 billing_invoices, amount_paid is never greater than total_amount (every paid invoice is paid exactly). A solution that tries to source the credit from an invoice overpayment finds none and must instead use the owner balance field directly.",
+    "Idempotent repair: the snapshot has no credit_balance or credit_fixed fields on owners. A second run must not duplicate audit_log rows or ops_reports rows for the same batch; the verifier re-derives owners_fixed and total_credit from the live owner balance state, not from the gold's run-local delta."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice client account negative balance credit on account accounting policy",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "If a client account shows a negative balance, i.e. the account is in credit, application can be made to the practice and the credit amount will be paid to the account holder. (Yorkshire Equine Practice)",
+          "Credit balances can result from insurance paying more than anticipated or duplicate payments; the difference shows as a credit on the account. (OmniPG Vet)",
+          "Do not leave a credit on a client’s account; refund the difference to the original payment form. (Today’s Veterinary Business)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Sign-flip field migration with cents precision; the seed may contain zero negatives \u2014 in which case doing NOTHING is correct and the verifier accepts the pristine state ONLY for this collection... no: assert no row changed and no credit_fixed tags exist."
+    "uniqueness_searches": [
+      {
+        "query": "reinforcement learning benchmark veterinary clinic owner balance underflow credit audit dual path verification",
+        "top_results": [
+          "No public RL benchmark task combines a financial sign-flip repair with an audit log, an ops report, and dual-path SQL/API cents-exact verification.",
+          "Existing veterinary practice management tasks focus on invoicing or reporting, not on reconciling a negative client balance against the invoice ledger and producing an audit trail.",
+          "The combination of a single rare underflow row, decoy zero-balance owners, and cent-precision credit conversion is not present in open-source agent evaluation suites."
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 fuses a financial repair with an audit and a summary report. The agent must derive the negative-balance set from 220 owner rows, match it against the invoice ledger to rule out an overpayment explanation, and write three interdependent outputs (owners, audit_log, ops_reports) that are all idempotent and cents-exact."
   }
 }

@@ -1,17 +1,35 @@
-# 014_boarding_occupancy_snapshot — REDTEAM notes
+# REDTEAM — 014_boarding_occupancy_snapshot
 
-## Mission
-Record the occupancy snapshot the morning huddle uses. Create veterinary_clinic_system_ops_reports with one row per location: {report: 'boarding_occupancy', batch_code: <episode batch code>, location_id, total_runs, occupied_runs, occupancy_pct: <round(100*occupied/total, 1)>}. Exactly 3 rows.
+## Status
 
-## Why this is hard / unique
-Simple aggregation but exact-count + live-nonce fields defeat hardcoding; baseline of the report family.
+Phase 4 hardening is **pending**. This file is a stub written during the v2
+hardmode codegen session; no live attack-fix-attack cycle has been run.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Known red-herring hazards (confirmed from seed snapshot)
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+1. Locations 2 and 3 each have runs but zero occupied runs. The report must
+   list them explicitly with `occupied: 0`; omitting them is a failure mode.
+2. The five occupied runs are all `run_type = kennel`, but one guest is
+   `species = feline` (patient 8) and one is `species = equine` (patient 10).
+   `by_species` must come from `patients.species`, not from the run type.
+3. The snapshot must aggregate `boarding_runs`, not `boarding_reservations`.
+   Counting reservations would still yield five, but it would miss run-type,
+   status, and location data and could count reserved decoys.
+4. Fee schedule lookup is required for `board_night_rate` and
+   `potential_revenue`; a shortcut that hardcodes 38 would pass on this seed
+   but fail if fees change.
+
+## Phase 4 work remaining
+
+- Run `gold.py` and `gold_alt.py` against a live container.
+- Run the verifier and confirm all dual-path counts.
+- Attempt reward-hacking shortcuts:
+  - write the report from reservations instead of runs;
+  - drop empty locations from the report;
+  - derive `by_species` from `boarding_runs.run_type`;
+  - hardcode the BOARD-NIGHT rate;
+  - append a new report row on each run instead of overwriting;
+  - modify a run/reservation to inflate occupancy.
+- Harden the verifier against each shortcut and re-run.
+- Measure `max_steps` and `par_steps` from a successful live gold run and
+  update `task.json`.

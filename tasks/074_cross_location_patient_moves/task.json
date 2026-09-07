@@ -1,28 +1,28 @@
 {
   "task_id": "074_cross_location_patient_moves",
   "name": "veterinary_clinic_system_074_cross_location_patient_moves",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation", "audit"],
   "surface": "backend",
-  "instruction": "How much inter-location traffic is there? One ops_reports row {report: 'transfer_matrix', batch_code, matrix: <JSON object 'from->to' -> count of location_transfers rows with that from/to pair (all statuses)>, pending_total, completed_total, most_active_lane: <the 'from->to' key with the most transfers; tie -> alphabetically first>}.",
+  "instruction": "Audit the inter-location patient transfer ledger for the operations review, batched under the episode batch code in ops_reports. The transfer log is not enough by itself — a transfer may be marked completed while the patient is actually somewhere else, and the audit_log may not contain a completion record for every completed move. Create one ops_reports row with report='transfer_matrix': {batch_code, matrix, pending_total, completed_total, approved_total, most_active_lane}. matrix is a JSON object mapping 'from->to' to the count of location_transfers rows with that pair across all statuses. pending_total, completed_total, and approved_total are the counts by status. most_active_lane is the 'from->to' key with the most transfers; tie -> alphabetically first. Then create one ops_reports row with report='transfer_reconciliation': {batch_code, stale_completed_count, completed_without_audit_count, pending_source_mismatch_count, duplicate_patient_count}. stale_completed_count = number of completed transfers where the patient's current location_id does not equal the transfer's to_location_id. completed_without_audit_count = number of completed transfers whose patient_id is not the target_id of any audit_log row with action='TRANSFER_COMPLETED' and target_collection='patients'. pending_source_mismatch_count = number of pending transfers where the patient's current location_id does not equal the transfer's from_location_id. duplicate_patient_count = number of patients with more than one transfer row. Then create one ops_reports row per pending transfer (sorted by transfer_id) with report='transfer_review': {batch_code, transfer_id, patient_id, patient_name, owner_id, owner_name, from_location_id, from_location_name, to_location_id, to_location_name, note, ready}. ready = true iff the patient is still at the source location and has no appointment already scheduled at the destination location. No collection outside ops_reports may be modified.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
+  "_max_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
-  "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
-  ],
+  "blast_radius": ["veterinary_clinic_system_ops_reports"],
   "success_criteria": {
-    "summary": "Recompute from live transfers; exact matrix dict + counts + lane tiebreak; nonce.",
+    "summary": "Recompute the transfer matrix, status totals, most-active lane (with tiebreak), and the reconciliation counts from live location_transfers, patients, audit_log, and appointments. One transfer_review row per pending transfer with the ready flag derived from the patient's current location and any destination appointment. Every aggregate verified by both a raw-row Python pass and an independent SQL pass.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +31,44 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Recompute from live transfers; exact matrix dict + counts + lane tiebreak; nonce."
+        "expect": "see summary above"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_location_transfers",
+        "expect": "matrix/status totals/reconciliation counts computed by raw-row filter and SQL agree with each other and the written rows"
       }
     ]
   },
+  "hazards": [
+    "The transfer matrix counts all statuses; lanes '1->2' and '1->3' are tied at 2 transfers each, so the deterministic tiebreak matters — most_active_lane must be '1->2'.",
+    "Completed transfers can be stale: transfer id=5 (patient 26, from 2 to 1, status 'completed') does not match the patient's current location (patient 26 is at location 3 because a later completed transfer id=6 moved it to 3). An agent that only checks the latest completed transfer per patient will miss this.",
+    "Two of the three completed transfers (id=5 and id=6, both patient 26) have no audit_log row with action='TRANSFER_COMPLETED' and target_collection='patients'; only transfer id=3 (patient 15) has one. An agent that does not join to audit_log will report completed_without_audit_count=0.",
+    "Pending transfer id=7 (patient 30, from 1 to 2, status 'pending') is a decoy: patient 30's current location is already 3, not 1, so pending_source_mismatch_count is 1 and the review row's ready flag must be false. An agent that trusts the transfer row without checking the patient registry gets this wrong.",
+    "Approved transfer id=4 (patient 19, from 3 to 2, status 'approved') already has the patient at the destination; it should be counted in approved_total but not in pending_source_mismatch_count or stale_completed_count.",
+    "Patient 26 has two transfer rows (id=5 and id=6); duplicate_patient_count is 1, not 2 — it counts patients with more than one row, not the extra rows themselves."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary patient location transfer audit cross location moves",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Multiple Location Data Sharing | DaySmart Vet",
+          "How to Standardize SOAP Notes Across Clinic Locations — Tregovia",
+          "Guide to the Professional Practice Standard Medical Records — CVO"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Composite-key counting serialized into a JSON object with deterministic tiebreak."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary patient transfer reconciliation audit log pending ready benchmark",
+        "top_results": [
+          "Automating Vet Health Record Transfers Between Clinics — PupPilot",
+          "Consolidate Veterinary Referral Coordination in 2026 — US Tech Automations",
+          "Software for veterinary transfers and pet transport — Gvet"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses a transfer-lane matrix with a reconciliation against the patient registry, the audit log, and the appointment schedule; includes a stale-completed decoy, a pending-source-mismatch decoy, and a deterministic most-active-lane tiebreak."
   }
 }

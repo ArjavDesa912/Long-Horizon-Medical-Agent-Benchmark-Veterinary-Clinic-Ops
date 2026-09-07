@@ -1,28 +1,31 @@
 {
   "task_id": "091_idempotent_reminder_send",
   "name": "veterinary_clinic_system_091_idempotent_reminder_send",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "idempotency",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["idempotency", "workflow", "aggregation"],
   "surface": "backend",
-  "instruction": "Run the vaccination reminder batch such that running it TWICE is safe. For each patient with an overdue vaccination (due_date strictly before episode date) and no existing reminder_queue row with dedupe_key='vac-<patient_id>-<batch_code>', push one row {kind: 'vaccination_due', patient_id, due_date: <oldest overdue due>, message: 'Overdue vaccination reminder <batch_code>', status: 'queued', queued_by: 'system', queued_at: episode timestamp, dedupe_key: 'vac-<patient_id>-<batch_code>'}. Rows that already carry the dedupe_key must not be duplicated or modified.",
+  "instruction": "Run the overdue-vaccination reminder batch for the episode. For each patient with at least one vaccination whose due_date is strictly before the episode date, push one reminder_queue row {kind: 'vaccination_due', status: 'queued', patient_id, due_date: <that patient's earliest overdue due_date as midnight-anchored ISO>, message: 'Overdue vaccination reminder <batch_code>', queued_by: 'system', queued_at: <episode timestamp>, dedupe_key: 'vac-<patient_id>-<batch_code>'} — but only if no reminder_queue row with that dedupe_key already exists. Do not modify, delete, or duplicate any pre-existing reminder_queue rows. After the batch, upsert exactly one ops_reports row {report: 'vaccination_reminder_batch', batch_code, overdue_patients: <O>, queued: <Q>} where O is the number of distinct overdue patients and Q is the number of new rows actually pushed this run. A second run of the same batch must push zero new reminder rows and update the report to queued: 0.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "set after live gold measurement in QC session",
+  "par_steps": null,
+  "_par_steps_note": "set after live gold measurement in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_reminder_queue"
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Compute expected overdue set; assert exactly one row per patient with correct dedupe_key (live nonce); assert no patient has 2 rows with the same dedupe_key; seeded rows unchanged; total == 4 + E.",
+    "summary": "One new queued vaccination_due reminder per overdue patient (dedupe_key keyed to live batch_code); seed queue rows unchanged; ops_reports upserted with correct overdue/queued counts; all derived numbers computed two independent ways (Python filter and SQL GROUP BY) and must agree.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +34,43 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Compute expected overdue set; assert exactly one row per patient with correct dedupe_key (live nonce); assert no patient has 2 rows with the same dedupe_key; seeded rows unchanged; total == 4 + E."
+        "expect": "exactly one new row per overdue patient with correct dedupe_key and earliest overdue due_date; no seed row modified; report upserted by batch_code"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_vaccinations",
+        "expect": "overdue patient count and earliest due_date per patient agree between raw-row Python filter and SQL GROUP BY/MIN"
       }
     ]
   },
+  "hazards": [
+    "Pre-existing reminder_queue rows id=3 (kind='invoice_overdue', status='sent') and id=4 (kind='boarding_checkin', status='queued') are non-vaccination decoys. A solution that pushes a reminder for every queued row, or that flips all queued rows to vaccination_due, will touch these and fail the seed canary.",
+    "Pre-existing vaccination_due rows id=1 (patient_id '2') and id=2 (patient_id '5') are queued but have no dedupe_key. A solution that modifies them to add the current batch's dedupe_key/message changes the seed canary; a solution that skips every patient that already has any queued vaccination_due row undercounts the batch by 2.",
+    "Vaccinations with due dates in 2026-09-25..2026-10-05 straddle the episode-date jitter window (2026-09-27..2026-10-03). Example rows: id 164 (patient 82, FVRCP, due 2026-09-29), id 204 (patient 102, FVRCP, due 2026-09-30), id 416 (patient 208, rabies, due 2026-09-30). A non-strict comparison or a fixed build date shifts the overdue set by multiple rows.",
+    "A patient may have multiple overdue vaccinations; the reminder due_date must be that patient's earliest overdue due_date (MIN), not an arbitrary one or the latest.",
+    "ops_reports does not exist in the snapshot; gold and verifier must tolerate a missing table on first read."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary vaccination reminder batch idempotent deduplication overdue recall system",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "VetCarePress VaccinationReminderService (webdevelop.hu)",
+          "Capture Lapsed Vaccines: 3 Reminder Workflows for 2026 (ustechautomations.com)",
+          "ezyVet API Integration: Automate Recall and Follow-Up (rexautomaton.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Explicit idempotency key discipline; verifier runs the gold twice to prove no duplication \u2014 agents that blind-insert fail the second pass."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary overdue vaccination reminder dedupe_key batch ops_reports hardmode benchmark task",
+        "top_results": [
+          "Veterinary Practice Reporting Every Week (digitail.com)",
+          "Veterinary Clinic Compliance Audit Checklist (paperform.co)",
+          "Veterinary Automation Playbook 2026 (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines an idempotent batch enqueue with a per-patient earliest-overdue derivation, a dedupe_key, and an upserted aggregate report. The verifier validates the overdue set with a dual-path API-vs-SQL computation and explicitly checks that pre-existing non-vax and vax queue rows are not touched."
   }
 }

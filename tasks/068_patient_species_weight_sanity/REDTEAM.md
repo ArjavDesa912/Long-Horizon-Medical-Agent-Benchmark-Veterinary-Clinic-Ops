@@ -1,17 +1,20 @@
-# 068_patient_species_weight_sanity — REDTEAM notes
+# 068_patient_species_weight_sanity - REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Sanity-check patient weights against species-typical ranges (verify typical ranges online if unsure): canine 1–90 kg, feline 1–15 kg, avian 0.02–2 kg, exotic 0.02–15 kg, equine 200–700 kg, other 0.02–200 kg. For every patient whose weight_kg falls outside its species range, set weight_flag='out_of_range' and weight_checked='<batch_code>'; for every in-range patient set weight_flag='plausible' (no tag field). Patients with missing weight get weight_flag='missing'. All other fields byte-identical.
+Run a species/weight sanity audit on the patients table using web-search-derived species-typical weight ranges. Set weight_flag to plausible/out_of_range/missing, tag out_of_range rows with weight_checked=batch, write a per-species + ALL weight_sanity ops_reports summary, enqueue a weight_recheck reminder for every out_of_range patient, and write an audit log.
 
 ## Why this is hard / unique
-Domain-range table (must be applied exactly) + three-way classification with tag-on-one-class-only asymmetry.
+- The exact species ranges must be recovered from current veterinary references, not given in the prompt.
+- Per-patient flag updates across 300 patients with tag-on-only-one-class asymmetry.
+- Boundary hazards: avian weights at 1.0, small canines at 4-5 kg, equine at 398 kg.
+- Dual-path verification: Python filter vs SQL GROUP BY/CASE counts.
+- Idempotent re-run: same flags, report, reminders, and audit state.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) - confirmed against seed_snapshot.json
+- All 21 avian patients have weight_kg = 1.0 (ids 7, 23, 31, 38, 95, 100, 106, 112, 135, 150, etc.).
+- 7 small canines at 4-5 kg (ids 66, 144, 146, 166, 201, 205, 264).
+- 16 equine patients range 398-518 kg; id 211 is 398 kg.
+- All 300 patients have non-null weight_kg.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 - NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

@@ -1,17 +1,18 @@
-# 066_owner_contact_normalization — REDTEAM notes
+# 066_owner_contact_normalization - REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Normalize owner contact data for the SMS gateway: rewrite every owner's phone to E.164-ish digits-only form '+1' followed by the 10 digits (strip punctuation; all seeded numbers are US 10-digit like '(828) 555-0101'), and lowercase every owner's email. Add field contact_normalized='<batch_code>' to every row you change. Rows already compliant keep their values but still get the tag. Do not change names, addresses, or balances.
+Normalize every owner contact for an SMS migration: phone to '+1' + last 10 stripped digits, email lowercased, contact_normalized tag on every row. Then run a contact-quality audit (ops_reports summary), enqueue reconciliation reminders for duplicate phones, and write an audit_log entry.
 
 ## Why this is hard / unique
-Deterministic string normalization across a whole collection; the digits-only transform must preserve the area code correctly.
+- Deterministic string normalization across 220 owners, with exact punctuation stripping.
+- Real collision: two owners share the same phone and must be flagged, not merged.
+- Multi-collection write (owners, ops_reports, reminder_queue, audit_log) with idempotent re-run.
+- Dual-path verification of the normalization and duplicate counts.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) - confirmed against seed_snapshot.json
+- All 220 owner phones contain punctuation; e.g. owner 1 is '(828) 555-0101', owner 100 is '(828) 555-1099'.
+- Owners 1 and 22 both have phone '(828) 555-0101' -> normalized '+18285550101'.
+- All 220 owners have non-empty emails, so missing_email_count = 0.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 - NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

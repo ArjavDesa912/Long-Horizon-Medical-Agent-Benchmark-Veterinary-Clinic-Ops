@@ -1,52 +1,67 @@
 {
   "task_id": "041_noshow_fee_flag",
   "name": "veterinary_clinic_system_041_noshow_fee_flag",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "update",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "billing", "aggregation"],
   "surface": "backend",
-  "instruction": "Front-desk cleanup: every appointment with status 'no_show' must carry a follow-up marker. Add field follow_up='call_owner' to each no_show appointment and leave every other appointment byte-identical.",
+  "instruction": "Charge the clinic's standard no-show fee for every missed appointment. The fee is a flat $25.00. For each appointment with status 'no_show' that does not already have a no-show fee invoice for this batch: (1) set follow_up='call_owner' on the appointment; (2) create a billing invoice {invoice_number: 'NS-<batch_code>-<appointment_id>', status: 'draft', owner_id from the patient, patient_id from the appointment, location_id from the appointment, issued_date and due_date set to the episode date, total_amount: 25.00, line_items: [{description: 'No-show fee', quantity: 1, unit_price: 25.00}]}; (3) push an audit_log row {actor:'system', actor_role:'system', action:'NO_SHOW_FEE', target_collection:'billing_invoices', target_id:<new invoice id>, details:'No-show fee invoice <invoice_number> for appointment <appointment_id> (<batch_code>)', occurred_at: episode timestamp}. Finally, push one ops_reports row report='no_show_fee_summary' keyed by batch_code with {total_no_shows, total_fees, by_location: JSON object mapping location_id to fee count}. Do not alter non-no-show appointments, do not duplicate invoices on rerun, and do not touch existing billing invoices.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 5,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps cannot be measured in a codegen-only session. They must be recorded from a live gold run in the QC container.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_appointments"
+    "veterinary_clinic_system_appointments",
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: no_show rows -> follow_up=='call_owner'; all other appointments byte-identical; count 46.",
+    "summary": "Recompute the no-show set from live appointments. Every no_show row must have follow_up='call_owner' and all other fields unchanged. There must be exactly one new billing invoice per no_show with the expected invoice_number pattern and exact fields (owner joined through patients, $25.00 total, one line item). There must be exactly one audit_log row per new invoice with exact fields. There must be exactly one ops_reports no_show_fee_summary row for this batch with total_no_shows, total_fees, and by_location counts, all derived two independent ways (Python filter and SQL) and agreeing. All other collections, including existing billing_invoices, are byte-identical.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: no_show rows -> follow_up=='call_owner'; all other appointments byte-identical; count 46."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "appointments + billing_invoices + audit_log + ops_reports", "expect": "one invoice+audit per no_show, summary row with exact counts" },
+      { "type": "dual_path", "collection": "appointments and billing_invoices", "expect": "total no-shows, total fees, and per-location counts agree between Python filter and SQL" }
     ]
   },
+  "hazards": [
+    "Non-no-show appointments (scheduled, confirmed, completed, checked_in) are decoys: ~482 of 548 appointments must remain untouched, including their follow_up field. A bulk 'set follow_up on everything' solution fails the byte-identity canary.",
+    "No-show fee invoices are batch-keyed by invoice_number 'NS-<batch_code>-<id>'. A solution that uses a fixed or missing batch code will create duplicates on rerun or collide with other episodes.",
+    "The owner_id must come from the patient referenced by the appointment, not from the appointment itself (which lacks owner_id). Hardcoding an owner or using appointment.location_id as owner will misroute every invoice.",
+    "The $25.00 flat fee is not in fee_schedules. A solution that picks the WELL-EXAM ($62) or SICK-EXAM ($85) price will produce the wrong invoice total and fail the exact-cents check.",
+    "No-show appointments are in the past (2026-08-05 to 2026-09-03) relative to the episode. A solution that charges only future no-shows will find none and fail.",
+    "Existing billing_invoices (260 rows, INV-1001...INV-1260) are outside the agent's target set and must remain byte-identical. A solution that appends fees to existing invoices instead of creating new ones will corrupt them and fail."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary clinic no show fee policy billing invoice",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "No-Show/Cancellation Policy - Wildwood Veterinary Clinic",
+          "Policies In Grand Rapids, MI | Eastown Veterinary Clinic",
+          "No Show & Cancellation Policy | Animal Medical Hospital"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Baseline surgical update; the byte-identity guard on untouched rows defeats bulk-rewrite hacks."
+    "uniqueness_searches": [
+      {
+        "query": "RL benchmark veterinary no show fee invoice audit log workflow",
+        "top_results": [
+          "Veterinary Appointment Scheduling | Online Vet Booking | ClinicDesq",
+          "Veterinary Scheduling Software | skdul",
+          "Why Veterinary Clinics Keep Double-Booking in 2026 (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 expands the v1 single-field update into a billing-and-audit workflow across four collections. It requires a patient-to-owner join, a fixed-policy fee amount, batch-keyed invoice numbering, and idempotent rerun safety. All derived numbers (totals and per-location counts) are dual-path verified."
   }
 }

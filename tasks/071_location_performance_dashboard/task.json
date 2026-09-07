@@ -1,28 +1,28 @@
 {
   "task_id": "071_location_performance_dashboard",
   "name": "veterinary_clinic_system_071_location_performance_dashboard",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation", "dashboard"],
   "surface": "frontend",
-  "instruction": "Recreate the org-admin 'All Locations' dashboard rollup. One ops_reports row per location: {report: 'location_rollup', batch_code, location_id, location_name, appointments_total, appointments_today: <appointment_date == episode date>, active_patients: <patients with status 'active'>, occupancy_pct: <round(100*occupied_runs/total_runs,1) from boarding_runs at that location>}.",
+  "instruction": "Build the monthly multi-location operations dashboard in ops_reports for the org-admin All Locations view. For each of the three locations, create one ops_reports row with report='location_rollup' and the batch code: {location_id, location_name, appointments_total, appointments_today (appointment_date date-prefix equals the episode date), appointments_completed, appointments_no_show, completed_pct (round 100*appointments_completed/appointments_total, 1), no_show_pct (round 100*appointments_no_show/appointments_total, 1), active_patients (patients with status='active' at this location), total_providers, veterinarians (role='veterinarian'), support_staff (all other roles), has_kennel_staff (true iff any provider at that location has role='kennel_attendant'), total_runs (boarding_runs at this location), occupied_runs (status='occupied'), occupancy_pct (round 100*occupied_runs/total_runs, 1), paid_revenue (sum of total_amount on paid invoices at this location), transfers_in (location_transfers with to_location_id=this location), transfers_out (location_transfers with from_location_id=this location)}. Then create one ops_reports row per location with report='location_top_service': {location_id, location_name, top_service_description, top_service_count, top_service_revenue}. The top service is the line-item description that appears most often on paid invoices at that location (tie -> alphabetically first); top_service_count is the number of line items with that description, top_service_revenue is the sum of unit_price*quantity for those line items. Use the appointment's location_id, not the provider's home location, for appointment counts. Use paid invoices only for revenue and top service; do not use billing_estimates. Use the physical boarding_runs table for occupancy, not boarding_reservations. No collection outside ops_reports may be modified.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 11,
+  "max_steps": null,
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
+  "_max_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
-  "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
-  ],
+  "blast_radius": ["veterinary_clinic_system_ops_reports"],
   "success_criteria": {
-    "summary": "Recompute all four metrics per location from live data; assert 3 rows exact (pct within 0.05); nonce.",
+    "summary": "Recompute all per-location dashboard metrics from live collections; exactly one location_rollup row and one location_top_service row per active location, with the correct counts, percentages (within 0.05 pct points), revenue, and top service. Provider counts and appointment counts must be decoupled (provider home location != appointment location in many rows); occupancy must use boarding_runs, not reservations. Every aggregate verified by both a raw-row Python pass and an independent SQL pass.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +31,44 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Recompute all four metrics per location from live data; assert 3 rows exact (pct within 0.05); nonce."
+        "expect": "see summary above"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_appointments",
+        "expect": "appointments_total/today/completed/no_show and paid_revenue/top_service recomputed by raw-row filter and SQL GROUP BY and agree with each other and the written rows"
       }
     ]
   },
+  "hazards": [
+    "Provider home location vs appointment location mismatch: 364 of 548 appointments have a provider whose location_id differs from the appointment's location_id (e.g. appointment id=1 is at location 1 but provider_id=3, whose home location is 2). Counting appointments by provider home location would over/under-count every location.",
+    "Boarding occupancy must come from boarding_runs.status='occupied'. boarding_reservations has 5 checked_in rows at location 1 only, but the physical run board has 5 occupied runs at location 1, 0 at locations 2 and 3 (boarding_runs K01-K05 are occupied at loc 1). Using reservation counts as capacity or occupancy produces wrong percentages at every location.",
+    "Paid revenue and top service must use billing_invoices with status='paid'. billing_estimates and draft/sent invoices are not cash revenue and must not be counted.",
+    "The top service per location is not uniform: location 1 = 'Ear cytology' (33 paid line items, revenue 8305.00), location 2 = 'Vaccination – rabies' (37 items, 8911.00), location 3 = 'Boarding (3 nights)' (35 items, 7740.00). An agent that picks the global top service or uses all invoices puts the wrong description in each row.",
+    "appointments_today depends on the live episode_date, which jitters per episode. The seed has appointments on 2026-09-04, 2026-09-28, 2026-10-01, etc., so the today count is not a constant and must be derived live from the nonce.",
+    "active_patients must use patients.status='active'; patient id=27 has status='transferred' and must not be counted at its home location."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary clinic location dashboard KPI appointments revenue boarding occupancy",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Executive Dashboard and Predictive Analytics | Sami",
+          "Veterinary Business Intelligence for Revenue Growth | Bittsi",
+          "Real-Time Business Dashboard For Pet Businesses | Happy Pet Tech"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Four-metric join across three collections per location; mirrors the dashboard's org-admin toggle."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary clinic location dashboard top service revenue boarding occupancy benchmark task",
+        "top_results": [
+          "Veterinary Practice Benchmarking Guide",
+          "Executive Dashboard and Predictive Analytics | Sami",
+          "Pet Care Services Dashboard in Power BI"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses location-level appointment flow, boarding occupancy, provider staffing, paid revenue, top service, and transfer volume into a single dashboard, with the explicit decoupling of provider home location from appointment location and the physical-run-board occupancy source. Dual-path verification across six collections."
   }
 }

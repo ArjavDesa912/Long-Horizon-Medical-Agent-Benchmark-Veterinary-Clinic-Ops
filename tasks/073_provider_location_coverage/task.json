@@ -1,28 +1,28 @@
 {
   "task_id": "073_provider_location_coverage",
   "name": "veterinary_clinic_system_073_provider_location_coverage",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "staffing", "dashboard"],
   "surface": "backend",
-  "instruction": "Staffing snapshot: one ops_reports row per location {report: 'provider_coverage', batch_code, location_id, veterinarians: <count of providers role 'veterinarian'>, support_staff: <all other roles>, has_kennel_staff: <true iff at least one 'kennel_attendant'>}.",
+  "instruction": "Produce the provider coverage and workload report for the org-admin staffing review, batched under the episode batch code in ops_reports. The providers table lists each team member's home location, but providers are frequently cross-booked to see patients at other locations — the appointment schedule is the source of truth for where work happened, not the provider's home. Create one ops_reports row per location with report='provider_coverage': {batch_code, location_id, location_name, veterinarians (count of providers with role='veterinarian' at that location), support_staff (count of providers with any other role at that location), total_providers, has_kennel_staff (true iff at least one provider at that location has role='kennel_attendant'), active_patients (patients with status='active' at that location), patients_per_veterinarian (round(active_patients/veterinarians, 1) if veterinarians > 0 else 0.0), appointments_at_location (appointments with location_id=this location), completed_at_location, no_show_at_location, completed_pct (round(100*completed_at_location/appointments_at_location, 1) if any), no_show_pct, total_runs (boarding_runs at this location), occupied_runs, occupancy_pct (round(100*occupied_runs/total_runs, 1) if total_runs else 0.0)}. Then create one ops_reports row per provider with report='provider_workload': {batch_code, provider_id, provider_name, role, location_id (home location), home_location_name, appointment_count (appointments with provider_id=this provider, regardless of appointment location), completed_count, no_show_count, completion_pct (round(100*completed_count/appointment_count, 1) if any), no_show_pct (round(100*no_show_count/appointment_count, 1) if any)}. Include every provider, even those with zero appointments. No collection outside ops_reports may be modified.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 7,
+  "max_steps": null,
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
+  "_max_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
-  "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
-  ],
+  "blast_radius": ["veterinary_clinic_system_ops_reports"],
   "success_criteria": {
-    "summary": "Recompute from live providers; exact ints/bools; 3 rows; nonce.",
+    "summary": "Recompute per-location coverage (vets, support, kennel staff, active patients, appointments, occupancy) and per-provider workload (appointments, completed, no-show, percentages) from live data; exactly one provider_coverage row per location and one provider_workload row per provider. Every aggregate verified by both a raw-row Python pass and an independent SQL pass.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +31,43 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Recompute from live providers; exact ints/bools; 3 rows; nonce."
+        "expect": "see summary above"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_appointments",
+        "expect": "per-location and per-provider appointment counts and rates computed by raw-row filter and SQL agree with each other and the written rows"
       }
     ]
   },
+  "hazards": [
+    "Provider home location is not the appointment location: 364 of 548 appointments have a provider whose location_id differs from the appointment's location_id (e.g. appointment id=1 is at location 1 with provider_id=3, whose home is location 2). Using provider home location for appointment counts produces wrong coverage and workload numbers.",
+    "Support staff (roles 'vet_tech', 'kennel_attendant', 'groomer') all have zero appointments in the schedule (providers id=5, 6, 7, 8, 9). They must still appear in provider_workload with appointment_count=0 and in provider_coverage as support_staff; an agent that filters to providers with appointments drops them.",
+    "Location 2 has no provider with role 'kennel_attendant' (Lucy Tran is a groomer at loc 2), so has_kennel_staff is false only for location 2; an agent that treats any non-veterinarian as kennel staff gets this wrong.",
+    "patients_per_veterinarian is computed from active_patients at the location (loc 1: 100 active / 2 vets = 50.0, loc 2: 106 / 1 = 106.0, loc 3: 93 / 1 = 93.0). An agent that counts all patients or all providers gets a different ratio.",
+    "The appointment status mix is not uniform per location: loc 1 has 187 appointments (58 completed, 27 no_show), loc 2 has 181 (58 completed, 20 no_show), loc 3 has 180 (60 completed, 19 no_show). These counts must come from appointments.location_id, not providers.location_id."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary provider coverage staffing workload appointments per veterinarian",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Nonveterinarian staff increase revenue and improve veterinarian productivity — JAVMA 2022",
+          "Chart of the month: Optimizing staff-to-veterinarian ratios — AVMA 2025",
+          "VetPartners Utilization Guide | Labor Cost and Labor Utilization Ratios"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Role-set split with a boolean derived from set membership."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary provider coverage workload appointment utilization benchmark task",
+        "top_results": [
+          "Veterinary Practice Benchmarking Guide",
+          "Benchmarking data plus elevating efficiency equals practice productivity — AVMA",
+          "VetPartners Utilization Guide | Labor Cost and Labor Utilization Ratios"
+        ]
+      }
+    ],
+    "differentiation_note": "Separates provider coverage (home location staffing) from provider workload (appointment assignment) and adds a cross-location work vs. home decoupling; includes zero-appointment support staff and per-location patient/provider ratios, with dual-path verification on all appointment aggregates."
   }
 }

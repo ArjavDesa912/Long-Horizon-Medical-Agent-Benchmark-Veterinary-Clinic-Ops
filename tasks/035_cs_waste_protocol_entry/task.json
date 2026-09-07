@@ -1,53 +1,75 @@
 {
   "task_id": "035_cs_waste_protocol_entry",
   "name": "veterinary_clinic_system_035_cs_waste_protocol_entry",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "workflow",
-  "surface": "frontend",
-  "instruction": "Replicate the Controlled Substances tab's waste workflow: a partially used Ketamine vial, 0.5 units, is being wasted at location 1 by Dr. Chen with Miles Turner witnessing. (1) Append the log row: item_name 'Ketamine', location_id '1', action 'waste', quantity 0.5, witnessed_by 'Miles Turner', performed_by 'Dr. Chen', occurred_at episode timestamp, notes 'Partial vial waste <batch_code>'. (2) Decrement the Ketamine pharmacy_inventory row at location 1 by 0.5 (quantity_on_hand is a float here). No other inventory rows change.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "update", "idempotency"],
+  "surface": "backend",
+  "instruction": "Run the episode's controlled-substance waste event end to end, under the episode batch code (ops_meta.batch_code). The waste event is parameterized by three integer fields in ops_meta, so read them first: cs_waste_loc_idx selects the target location — take the distinct location_id values among pharmacy_inventory rows flagged is_controlled, sort them ascending, and pick the value at index cs_waste_loc_idx; cs_waste_drug_idx selects the item — among the is_controlled pharmacy_inventory rows at that location, sort the item_name values alphabetically and pick the row at index cs_waste_drug_idx (the selected item is always stocked at the selected location); the waste quantity in units is cs_waste_qty_tenths divided by 10.0 — it is an integer count of tenths of a unit, not a float and not a percent. The waste must be recorded as performed by a veterinarian assigned to the selected location and witnessed by a veterinary technician (vet_tech) assigned to the selected location — look them up in providers; any single veterinarian/vet-tech pair at that location is acceptable. (1) Append one controlled_substance_log row: item_name and location_id of the selected inventory row, action='waste', quantity=the waste quantity, performed_by and witnessed_by = the chosen providers' full_name values, occurred_at = the episode timestamp (episode_date at midnight UTC), notes='Protocol waste <batch_code>'. (2) Decrement the selected pharmacy_inventory row's quantity_on_hand by exactly the waste quantity — it may become fractional; only that one inventory row may change. (3) Append one audit_log row: actor = the performing veterinarian's full_name, actor_role='veterinarian', action='CS_WASTE_LOGGED', target_collection='controlled_substance_log', target_id = the new log row's id, batch_code = the batch code, details='Waste protocol <batch_code>: <quantity> units of <item_name> at location <location_id>', occurred_at = episode timestamp. (4) Push exactly one ops_reports row: report='waste_protocol', batch_code, item_name, location_id, quantity_wasted, inventory_after = the post-decrement quantity_on_hand, performed_by, witnessed_by, log_id = the new controlled_substance_log row's id. No other collection, inventory row, log row, or audit row may change.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps must be measured from a real gold.py run against a live container in the QC session (RL_ENV_HARDMODE_CODEGEN_PROMPT); intentionally null here — do not guess a round number.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
-    "field": "batch_code"
+    "field": "batch_code",
+    "extra_fields": {
+      "cs_waste_loc_idx": { "min": 0, "max": 1 },
+      "cs_waste_drug_idx": { "min": 0, "max": 3 },
+      "cs_waste_qty_tenths": { "min": 1, "max": 9 }
+    }
   },
   "blast_radius": [
     "veterinary_clinic_system_controlled_substance_log",
-    "veterinary_clinic_system_pharmacy_inventory"
+    "veterinary_clinic_system_pharmacy_inventory",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Assert new log row exact (nonce in notes); assert location-1 Ketamine inventory qty == snapshot qty - 0.5 (float tolerance 1e-9); all other inventory rows byte-identical; log count 13.",
+    "summary": "The selected controlled pharmacy_inventory row (derived from ops_meta loc/drug indexes over is_controlled rows) is decremented by cs_waste_qty_tenths/10.0 with float-exact math, all other inventory rows byte-identical; controlled_substance_log gains exactly one waste row with the derived item/location/quantity, a valid veterinarian+vet-tech pair at the selected location, notes keyed to batch_code, and the episode date; audit_log gains exactly one CS_WASTE_LOGGED row pointing at the new log row; ops_reports gains exactly one waste_protocol row whose inventory_after matches the live post-decrement quantity and whose log_id matches the new log row. Post-decrement quantity is asserted via two independent reads (REST query vs SQL). All seeded collections outside the blast radius are canary-checked byte-identical.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Assert new log row exact (nonce in notes); assert location-1 Ketamine inventory qty == snapshot qty - 0.5 (float tolerance 1e-9); all other inventory rows byte-identical; log count 13."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_controlled_substance_log", "expect": "seed count + 1; new row fields exact; performed_by is a veterinarian and witnessed_by a vet_tech at the selected location (verified against providers)" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_pharmacy_inventory", "expect": "selected row quantity_on_hand == seed - waste_qty (float tolerance); every other row byte-identical" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_pharmacy_inventory", "expect": "post-decrement quantity_on_hand agrees between the REST read and an independent SQL SELECT" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_audit_log", "expect": "seed count + 1; new CS_WASTE_LOGGED row exact incl. batch_code and target_id = new log id" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "exactly one waste_protocol row for batch_code matching the live log row and live inventory" }
     ]
   },
+  "hazards": [
+    "Existing waste rows already in controlled_substance_log must not be edited or reused: snapshot id 3 is action='waste' item_name='Ketamine' location_id='1' quantity=0.4, and id 11 is action='waste' item_name='Tramadol' location_id='2' quantity=0.5 patient_id='10'. A solution that updates an existing waste row instead of appending fails the seed+1 count and the byte-identity check on seeded rows.",
+    "Every controlled drug is stocked at BOTH locations 1 and 2 — e.g. Ketamine is inventory ids 39 (loc 1) and 40 (loc 2), both quantity_on_hand 3, reorder_level 4; Buprenorphine ids 35/36, Tramadol 37/38, Alprazolam 41/42. An agent that matches on item_name alone decrements two rows or the wrong location; only the row selected by the nonce indexes may change.",
+    "The non-controlled inventory rows are decoys: 'Rabies vaccine 1yr' (ids 1-2), 'DHPP vaccine' (3-4), 'FVRCP vaccine' (5-6), 'Bordetella vaccine' (7-8) and all supply rows are not is_controlled — the alphabetical selection must run over controlled rows only, or the index mapping lands on a non-controlled item.",
+    "Several seeded controlled_substance_log rows have witnessed_by equal to a garbage character or empty (ids 2, 4, 5, 8, 10, 11) — an agent that copies a witness value from an existing row instead of looking up a real vet-tech at the location fails the role/location check.",
+    "cs_waste_qty_tenths is an integer 1-9 stored in ops_meta; an agent that pushes it as the quantity directly (e.g. 5 units instead of 0.5) or treats it as a percent produces a wildly wrong inventory decrement — the verifier compares float-exactly against seed - tenths/10.0.",
+    "audit_log has only 4 seeded rows and is append-only: a rerun that appends a second CS_WASTE_LOGGED row, or an agent that skips the audit row entirely, fails the seed+1 count. Likewise ops_reports is not one of the 24 seeded collections (absent from seed_snapshot.json) — the agent must create it blind; a solution that queries it first for schema and gives up writes nothing."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "query": "DEA controlled substance waste documentation requirements veterinarian witness two signatures partial vial disposal",
         "top_results": [
-          "DEA compliance - AAHA",
           "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
+          "DEA compliance - AAHA",
           "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Log-and-decrement atomicity across collections; float arithmetic on inventory quantity."
+    "uniqueness_searches": [
+      {
+        "query": "controlled substance waste event parameterized by per-episode nonce audit trail cross-collection inventory decrement benchmark task",
+        "top_results": [
+          "Veterinary controlled substance recordkeeping software comparisons",
+          "Veterinary clinic compliance audit checklist templates",
+          "No public benchmark task found combining nonce-parameterized CS waste + inventory decrement + audit append + report row"
+        ]
+      }
+    ],
+    "differentiation_note": "v1's single fixed waste row is upgraded to a per-episode randomized waste event (drug index, location index, and tenths-of-a-unit quantity all come from ops_meta) whose execution must atomically touch four collections: log append, float inventory decrement, audit append keyed by the new row id, and a report row reconciled against live post-mutation state. Role/location validation of the staff pair and the seeded garbage-witness decoys force real provider lookups."
   }
 }

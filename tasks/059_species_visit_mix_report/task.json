@@ -1,19 +1,21 @@
 {
   "task_id": "059_species_visit_mix_report",
   "name": "veterinary_clinic_system_059_species_visit_mix_report",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "workflow", "reconciliation"],
   "surface": "frontend",
-  "instruction": "Produce the data behind the Visits by Species report. One ops_reports row per species that appears among patients with at least one visit: {report: 'visits_by_species', batch_code, species, visits: <count of visit_records whose patient has that species>, distinct_patients: <distinct patients of that species with visits>, pct_of_visits: <round(100*visits/total_visits,1)>}. Any order.",
+  "instruction": "Produce the Visits by Species report for this episode under the batch code in ops_meta. The report has two parts. (1) One ops_reports row report='visits_by_species' per species that appears among the patients referenced by visit_records (join patients). Each row must include species, visits (total visit_records for that species), distinct_patients (distinct patients of that species with visits), pct_of_visits (round(100*visits/total_visits,1)), and pct_of_patients (round(100*distinct_patients/total_patients,1)) where total_patients is the count of all patients rows (300). Any visit whose patient_id cannot be resolved is counted under species='unknown'. (2) One ops_reports row report='visits_by_species_location' per (species, location_id) pair that appears among visit_records joined to patients, with species, location_id, visits, and distinct_patients for that pair. If any of these report rows already exist for this batch, delete and rewrite them. Do not modify visit_records or patients. Species with zero visits must be absent (do not write zero rows).",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "Measure via live gold run in QC session; do not guess.",
+  "par_steps": null,
+  "_par_steps_note": "Measure via live gold run in QC session; do not guess.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,31 +24,41 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute via patients join; exact ints; pct within 0.05 each; row set == species present; nonce.",
+    "summary": "From seed: total_patients=300, total_visits=371. visits_by_species: avian(31,18,8.4,6.0), canine(166,99,44.7,33.0), equine(22,10,5.9,3.3), exotic(20,12,5.4,4.0), feline(132,63,35.6,21.0). visits_by_species_location: 15 rows covering (avian,1)=3, (avian,2)=11, (avian,3)=17, (canine,1)=57, (canine,2)=53, (canine,3)=56, (equine,1)=5, (equine,2)=11, (equine,3)=6, (exotic,1)=8, (exotic,2)=5, (exotic,3)=7, (feline,1)=52, (feline,2)=43, (feline,3)=37, with distinct_patients as shown in verifier. Species with no visits must be absent. Dual-path counts (SQL vs Python) must agree.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute via patients join; exact ints; pct within 0.05 each; row set == species present; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "ops_reports", "expect": "exactly 5 visits_by_species + 15 visits_by_species_location rows for this batch" },
+      { "type": "dual_path", "collection": "visit_records/patients", "expect": "species and species-location counts and distinct-patient counts recomputed via SQL and Python; both agree" }
     ]
   },
+  "hazards": [
+    "pct_of_patients must use the full patients table (300 rows) as the denominator, not the 202 distinct patients that actually have visits. A solution using the smaller denominator produces wrong percentages.",
+    "Multiple visits per patient must be counted as visits. For example, patient 216 has two visit_records (id=10 and id=12), both canine. A solution that deduplicates by patient under-counts visits.",
+    "visit_records id=371 is unlocked and has an empty plan, but it is still a visit for species canine (patient 5) and must be counted. Excluding unlocked notes under-counts.",
+    "Species with zero visits must not get a row. Confirmed: only avian, canine, equine, exotic, and feline appear among the 371 visits.",
+    "The species-location matrix is dynamic and has 15 rows. A hardcoded list will fail on reseed."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "veterinary practice visits by species report distinct patients percentage",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "Veterinary practice management reports by species",
+          "AVMA veterinary demographics species statistics",
+          "Vet clinic reporting by species and location"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Join-driven aggregation mirroring the app's report screen; species with zero visits must be absent (not zero-rows)."
+    "uniqueness_searches": [
+ {
+        "query": "species visit mix report with location matrix benchmark veterinary",
+        "top_results": [
+          "Veterinary species visit mix benchmark",
+          "Multi-location species report task",
+          "Vet clinic species-location aggregation benchmark"
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 adds a two-dimensional species-by-location breakdown and a pct_of_patients metric that uses the full patient population as the denominator, forcing the agent to distinguish visits from distinct patients and to avoid conflating the two denominators."
   }
 }

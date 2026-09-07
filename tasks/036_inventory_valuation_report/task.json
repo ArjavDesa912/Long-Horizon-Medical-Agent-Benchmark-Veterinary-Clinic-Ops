@@ -1,52 +1,67 @@
 {
   "task_id": "036_inventory_valuation_report",
   "name": "veterinary_clinic_system_036_inventory_valuation_report",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation", "idempotency"],
   "surface": "backend",
-  "instruction": "Finance needs inventory valuation per location. One ops_reports row per location that HAS pharmacy inventory: {report: 'inventory_valuation', batch_code, location_id, medication_value: <sum unit_price*quantity_on_hand for category 'medication' items>, supply_value: <same for 'supply'>, controlled_units: <sum of quantity_on_hand over is_controlled items>, item_count: <rows at that location>}. Money in dollars (numbers).",
+  "instruction": "Produce the month-end inventory valuation for the practice's finance team, batched under the episode batch code (ops_meta.batch_code), as of the episode date. For every location that actually has pharmacy_inventory rows, push one ops_reports row with report='inventory_valuation', batch_code, location_id, location_name (resolved from the locations collection), and these aggregates computed from live inventory: item_count (rows at that location), medication_value (sum of unit_price*quantity_on_hand over category='medication' rows), supply_value (same over category='supply'), controlled_units (sum of quantity_on_hand over is_controlled rows), controlled_value (sum of unit_price*quantity_on_hand over is_controlled rows — note that controlled rows are also category='medication' and DO count in both places; this is intentional), low_stock_count (rows where quantity_on_hand <= reorder_level — the boundary is inclusive), and reorder_cost (sum over those low-stock rows of unit_price*(2*reorder_level - quantity_on_hand)). Then push one rollup ops_reports row with report='inventory_valuation_rollup', batch_code, location_id='ALL', location_name='ALL', and the same seven aggregates summed across the entire inventory. Finally append one audit_log row: actor='system', actor_role='system', action='INVENTORY_VALUATION', target_collection='pharmacy_inventory', target_id='bulk', batch_code, details='Inventory valuation <batch_code>: <N> locations, <I> items, total value <V>' where N is the number of locations with inventory, I is the total inventory row count, and V is the total of medication_value+supply_value across all rows formatted to two decimal places, occurred_at = the episode timestamp. Only ops_reports and audit_log may change; pharmacy_inventory and every other collection are read-only for this mission.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps must be measured from a real gold.py run against a live container in the QC session (RL_ENV_HARDMODE_CODEGEN_PROMPT); intentionally null here — do not guess a round number.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Recompute per location from live inventory; cents-exact money, exact counts/units (float tolerance 1e-9); rows == locations present in inventory.",
+    "summary": "One inventory_valuation ops_reports row per location that has pharmacy_inventory rows (locations 1 and 2 only — location 3 has no inventory), plus exactly one inventory_valuation_rollup row with location_id 'ALL' whose aggregates equal the sum of the per-location rows, plus exactly one new INVENTORY_VALUATION audit_log row with exact details text. Every aggregate is recomputed two independent ways inside the verifier (raw-row Python filter vs SQL GROUP BY/SUM with CASE aggregation) and both must agree with each other and with the written values. Money compared in cents; counts and unit sums exact. All seeded collections outside the blast radius — including pharmacy_inventory itself — are canary-checked byte-identical.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute per location from live inventory; cents-exact money, exact counts/units (float tolerance 1e-9); rows == locations present in inventory."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius (including pharmacy_inventory — read-only here)" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "exactly one inventory_valuation row per location present in inventory + one inventory_valuation_rollup row; every field asserted" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_pharmacy_inventory", "expect": "each aggregate agrees between a raw-row Python computation and an independent SQL GROUP BY location_id with CASE-conditional sums" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_audit_log", "expect": "seed count + 1; new INVENTORY_VALUATION row exact incl. batch_code" },
+      { "type": "internal_consistency", "collection": "veterinary_clinic_system_ops_reports", "expect": "rollup aggregates equal the sum of the per-location rows" }
     ]
   },
+  "hazards": [
+    "Controlled items are double-purpose: pharmacy_inventory ids 35-42 (Buprenorphine, Tramadol, Ketamine, Alprazolam at both locations) have category='medication' AND is_controlled=true — they count inside medication_value AND separately in controlled_value/controlled_units. An agent that excludes controlled items from medication_value under-reports it by exactly controlled_value.",
+    "location_id '3' (Cedar Park Animal Care Center) has zero pharmacy_inventory rows in the snapshot — all 42 rows are at locations '1' and '2'. An agent that emits a row for every location in the locations collection, or a zero row for location 3, fails the row-count check.",
+    "The low-stock boundary is inclusive: Convenia injection ids 17 and 18 have quantity_on_hand 4 == reorder_level 4, and Microchip scanner battery ids 29/30 (3 <= 4) and Ketamine ids 39/40 (3 <= 4) also qualify. An agent using '<' drops Convenia and undercounts low_stock_count and reorder_cost.",
+    "reorder_cost is per-line unit_price*(2*reorder_level - quantity_on_hand), summed — not unit_price*(reorder_level - qty) and not a flat restock-to-reorder-level. At location 1 the correct value is 813.25 (Bordetella 15.75*11, Convenia 76.25*4, battery 12*5, Ketamine 55*5); an agent using a different formula fails the cents-exact check.",
+    "controlled_units is a unit sum (35.0 per location), not a row count and not a dollar value — confusing it with controlled_value (1925.0) or the count of controlled rows (4 per location) fails.",
+    "ops_reports is absent from the seed snapshot (not one of the 24 seeded collections) and audit_log is append-only with 4 seeded rows — the agent must create the report table blind, and a rerun that appends a second INVENTORY_VALUATION row fails the audit seed+1 count."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "query": "veterinary practice pharmacy inventory valuation report carrying value controlled substances DEA inventory accounting",
         "top_results": [
-          "DEA compliance - AAHA",
-          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
-          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+          "Veterinary inventory management best practices (AVMA/aaha.org)",
+          "21 CFR 1304.11 Inventory requirements (eCFR)",
+          "Veterinary controlled drug inventory log guidance (Cubex)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Mixed aggregation (money vs unit counts) with category conditioning; controlled items are category 'medication' AND counted again in controlled_units \u2014 double-counting confusion is intended."
+    "uniqueness_searches": [
+      {
+        "query": "per-location inventory valuation rollup reconciliation report dual-path SQL vs API verification benchmark task",
+        "top_results": [
+          "Veterinary practice reporting and KPI guides",
+          "Inventory valuation accounting method explainers",
+          "No public benchmark task found combining per-location + rollup + audit append with dual-path verification"
+        ]
+      }
+    ],
+    "differentiation_note": "Extends v1's flat per-location aggregation into a three-way reconciled report: per-location rows, a practice rollup that must internally equal the sum of the parts, and an audit_log entry. Every derived number is verified through two independent computation paths (raw-row Python and SQL GROUP BY), and the controlled-double-count + inclusive low-stock boundary + rollup consistency are where a plausible-but-wrong solution fails."
   }
 }

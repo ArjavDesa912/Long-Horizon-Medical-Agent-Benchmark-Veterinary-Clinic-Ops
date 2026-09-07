@@ -1,52 +1,67 @@
 {
   "task_id": "043_double_booking_repair",
   "name": "veterinary_clinic_system_043_double_booking_repair",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "repair",
+  "category": ["repair", "workflow", "aggregation"],
   "surface": "backend",
-  "instruction": "The schedule has double-bookings: appointments on the same date, same room, same location, and identical start_time with status 'scheduled' or 'confirmed' (completed/checked_in/no_show are history, not conflicts). For each conflicting GROUP, keep the appointment created first (earliest created_at; tie -> lowest id) and move the others: set their start_time and end_time 30 minutes later than the kept appointment's (e.g. kept 09:00\u201309:30 -> moved 09:30\u201310:00) and add field rescheduled='<batch_code>'. If the shifted slot itself collides with another same-day same-room scheduled/confirmed appointment, keep shifting by 30 minutes until free (never past 17:00 \u2014 if that would happen, instead set status 'needs_reschedule' and leave times unchanged). Do not alter kept appointments.",
+  "instruction": "Repair future double-bookings in the schedule. Consider only appointments with appointment_date on or after the episode date and status in ('scheduled', 'confirmed'). For each conflicting group (same appointment_date, location_id, room, start_time), keep the appointment created earliest (created_at; tie -> lowest id) and shift the others: add 30 minutes to both start_time and end_time repeatedly until a free slot is found on the same date/location/room before 17:00 (start_time < 17:00 and end_time <= 17:00). If no such slot exists, set status to 'needs_reschedule' and leave the original times unchanged. For every moved or needs_reschedule appointment, set rescheduled='<batch_code>'. Do not alter kept appointments, past scheduled/confirmed rows, or rows with other statuses. After the schedule is repaired, log one audit_log row per moved or needs_reschedule appointment (action 'SCHEDULE_REPAIR', target_collection 'appointments', target_id <id>, details 'Schedule repair for appointment <id> (<batch_code>)', occurred_at episode timestamp) and push one ops_reports row report='schedule_repair_summary' keyed by batch_code with {future_candidates, rescheduled, needs_reschedule}.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 13,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps cannot be measured in a codegen-only session. They must be recorded from a live gold run in the QC container.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_appointments"
+    "veterinary_clinic_system_appointments",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute conflict groups from LIVE post-state invariants: assert NO same date+location+room+start_time duplicates among scheduled/confirmed (unless 'needs_reschedule'); assert every moved row is snapshot-row + 30min*k shift matching the deterministic cascade and tagged with nonce; assert kept rows byte-identical; count 46. Implement by replaying the documented algorithm from snapshot and comparing the resulting full expected state for the appointments collection (ids fixed).",
+    "summary": "Recompute the deterministic repair from the seed snapshot: for every future scheduled/confirmed row, either keep it byte-identical or update it to the cascade-dictated slot with rescheduled=batch, or set it to needs_reschedule with rescheduled=batch and original times. The live schedule must contain no future double-bookings among scheduled/confirmed/checked_in rows. There must be exactly one audit row per moved/needs row and one schedule_repair_summary row for this batch. The summary numbers (future_candidates, rescheduled, needs_reschedule) must be derived two independent ways (Python re-simulation and SQL) and agree.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute conflict groups from LIVE post-state invariants: assert NO same date+location+room+start_time duplicates among scheduled/confirmed (unless 'needs_reschedule'); assert every moved row is snap"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "appointments + audit_log + ops_reports", "expect": "exactly the deterministic cascade result, one audit per changed row, one summary row" },
+      { "type": "dual_path", "collection": "appointments", "expect": "future candidate, rescheduled, and needs_reschedule counts agree between Python re-simulation and SQL" }
     ]
   },
+  "hazards": [
+    "Past scheduled/confirmed appointments (e.g., 2026-09-16 ids 226/118, 2026-09-11 ids 256/61) are decoys with the same conflict pattern but must not be moved because their appointment_date is before the episode. A solution that ignores the date filter will over-shift.",
+    "Appointments with status completed, no_show, or checked_in must not be moved, even if they share a conflict key. Only 'scheduled' or 'confirmed' rows are candidates.",
+    "The shift cascade must keep shifting by 30 minutes until a free slot; for the 2026-10-04 16:00 Exam 3 group, id 38 keeps 16:00, id 128 shifts to 16:30, and id 200 must become 'needs_reschedule' because 17:00 is past the hard stop.",
+    "The 17:00 hard stop: start_time must be < '17:00' and end_time <= '17:00'. A row shifted to 17:00 start or end > 17:00 must instead get status 'needs_reschedule' with original times and rescheduled=batch.",
+    "Within a conflict group, the keeper is the earliest created_at (tie -> lowest id), not simply the lowest id. For the 2026-09-30 09:00 Exam 1 pair (ids 469 and 545), id 469 has the earlier created_at and must keep the slot; id 545 moves to 09:30.",
+    "Some appointments have end_time before start_time in the seed (e.g., id 313 12:30-12:00). The shift must add 30 minutes to both values, preserving the inverted relation (13:00-12:30), not swap or normalize them.",
+    "Idempotency: rescheduled is tagged with the live batch_code. A rerun must not create duplicate audit or ops_reports rows."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary clinic double booking appointment repair reschedule",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Prevent Veterinary Double Booking | Arion",
+          "Why Veterinary Clinics Keep Double-Booking in 2026 (ustechautomations.com)",
+          "Double-Booking Disasters: How Your PIMS Should Be Protecting Your CSRs | IDEXX Software"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Constraint-cascade repair (shift-until-free with a give-up state); requires simulating a deterministic algorithm \u2014 memorized answers fail after reseed."
+    "uniqueness_searches": [
+      {
+        "query": "RL benchmark deterministic appointment cascade repair needs_reschedule veterinary",
+        "top_results": [
+          "Veterinary Appointment Scheduling | Online Vet Booking | ClinicDesq",
+          "Veterinary Scheduling Software | skdul",
+          "Veterinary Queue Management System & Vet Check-In – NextMe"
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 adds a future-date filter, a hard 17:00 stop with a 'needs_reschedule' terminal state, an audit trail, and a dual-path summary report to the v1 cascade repair. It requires the agent to re-simulate a deterministic scheduling algorithm from live data and to preserve inverted start/end times that appear in the seed."
   }
 }

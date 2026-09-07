@@ -1,28 +1,31 @@
 {
   "task_id": "032_cs_running_balance_reconciliation",
   "name": "veterinary_clinic_system_032_cs_running_balance_reconciliation",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "aggregation",
-  "surface": "websearch",
-  "instruction": "DEA-style reconciliation: for each controlled item, the expected on-hand balance is sum(receive) - sum(administer) - sum(waste) - sum(dispense) over controlled_substance_log. Compare with pharmacy_inventory.quantity_on_hand for is_controlled items (sum across locations). Create one ops_reports row per controlled item present in the LOG: {report: 'cs_reconciliation', batch_code, item_name, log_balance: <number>, inventory_on_hand: <number or null if no inventory row>, discrepancy: <log_balance - inventory_on_hand, or null>}. Any order. Exactly one row per distinct logged item.",
+  "category": ["reconciliation", "aggregation", "report"],
+  "surface": "backend",
+  "instruction": "Run the controlled-substance per-location reconciliation report. For every pharmacy_inventory row where is_controlled is true, compute the expected running balance from controlled_substance_log entries for the same item_name and the same location_id: receipts (action='receive') add quantity; administrations, waste, and dispensings (action in ('administer','waste','dispense')) subtract quantity. Compare that log_balance to the physical pharmacy_inventory.quantity_on_hand for the same item and location. Push one ops_reports row (report='cs_reconciliation', batch_code) per controlled inventory row with item_name, location_id, location_name, log_balance, inventory_on_hand, and discrepancy (log_balance - inventory_on_hand). Rows with no matching log entries at that location have log_balance 0.0. Do not sum across locations. After the report, append one audit_log row (action='CS_RECONCILIATION', actor='system', actor_role='system', target_collection='ops_reports', target_id=batch_code, details containing the batch code and the number of items reviewed, occurred_at=episode timestamp). If report or audit rows for this batch already exist, overwrite them.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 13,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Recompute per-item balances from live cs log; inventory sums from live pharmacy_inventory where is_controlled. Assert one row per distinct logged item_name, exact numeric equality (floats within 1e-9), nulls where no inventory match; nonce correct.",
+    "summary": "Exactly one ops_reports row per controlled pharmacy_inventory (item, location) pair with log_balance, inventory_on_hand, and discrepancy computed per-location from the controlled_substance_log. Dual-path verification (raw-row Python aggregation and SQL GROUP BY/JOIN) for every aggregate. One audit_log summary row for the batch. controlled_substance_log and pharmacy_inventory are read but not modified.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +33,49 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute per-item balances from live cs log; inventory sums from live pharmacy_inventory where is_controlled. Assert one row per distinct logged item_name, exact numeric equality (floats within 1e-9)"
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "One row per controlled item/location with correct log_balance, inventory_on_hand, and discrepancy"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_audit_log",
+        "expect": "Exactly one CS_RECONCILIATION row for this batch"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_controlled_substance_log",
+        "expect": "per-item, per-location log_balance agrees between raw-row Python aggregation and an independent SQL GROUP BY with JOIN to pharmacy_inventory"
       }
     ]
   },
+  "hazards": [
+    "Location-conflation trap: controlled_substance_log entries are tagged with location_id and must be aggregated per (item, location), not per item. For example, all Buprenorphine log entries are at location 2, but inventory also exists at location 1. Summing across locations gives a wrong discrepancy for both.",
+    "Missing-log-location trap: Alprazolam at location 1 and Buprenorphine at location 1 have no controlled_substance_log entries. Their log_balance is 0.0 and the discrepancy is negative (short). An agent that only reports items present in the log will omit these rows.",
+    "Sign trap: receive adds quantity; administer, waste, and dispense all subtract quantity. Flipping any sign produces a wrong balance.",
+    "is_controlled filter: pharmacy_inventory contains non-controlled items (vaccines, supplies). Only rows where is_controlled is true belong in the report. In the seed snapshot, the only controlled items are Buprenorphine, Tramadol, Ketamine, and Alprazolam.",
+    "Witnessed-by decoy: one log row (Tramadol waste, id=11) has an empty witnessed_by, but this is a reconciliation task, not a correction task. The agent must not modify any log rows; the report simply reflects the existing data."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "query": "veterinary controlled substance log inventory reconciliation per location DEA 21 CFR 1304",
         "top_results": [
-          "DEA compliance - AAHA",
-          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
-          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+          "eCFR :: 21 CFR 1304.04 (Mar. 9, 2026) -- Maintenance of records and inventories. (https://www.ecfr.gov/on/2026-03-09/title-21/chapter-II/part-1304/subject-group-ECFR64b4002fc681198/section-1304.04)",
+          "DEA Controlled Substance Logging. A Guide for Veterinary Hospitals (https://www.cubex.com/news/dea-controlled-substance-logging-a-guide-for-veterinary-hospitals)",
+          "Inventories, Records, and Reports (https://www.deadiversion.usdoj.gov/mtgs/pract_awareness/conf_2018/may_2018/wingert.pdf)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Sign-correct multi-action ledger aggregation (receive positive, others negative) and intentional null handling; agents flip dispense/waste signs."
+    "uniqueness_searches": [
+      {
+        "query": "controlled substance log inventory reconciliation report per location multi-location veterinary software",
+        "top_results": [
+          "Veterinary Inventory Management Software | PetChart (https://www.pet-chart.com/veterinary-inventory-management)",
+          "Vet S8 - Electronic Drug Register for Vets | Modeus (https://www.modeus.co/en-us/products/vet-s8)",
+          "Multi-Location Inventory Management for Veterinary Groups | CUBEX (https://www.cubex.com/news/enterprise-inventory-management-the-foundation-for-scalable-veterinary-growth)"
+        ]
+      }
+    ],
+    "differentiation_note": "Performs a true multi-location controlled-substance reconciliation rather than a simple item-level sum. The task requires understanding that controlled-substance logs and physical inventory are both location-specific, and that an item can appear in inventory at a location with no matching log activity. The dual-path verification re-derives every balance both in Python and SQL."
   }
 }

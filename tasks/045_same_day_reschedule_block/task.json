@@ -1,52 +1,67 @@
 {
   "task_id": "045_same_day_reschedule_block",
   "name": "veterinary_clinic_system_045_same_day_reschedule_block",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "update",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "update", "reconciliation"],
   "surface": "backend",
-  "instruction": "Dr. Natarajan (provider id 3) called out sick. Move every 'scheduled' appointment of provider 3 that falls on or after the episode date to provider 4 (Dr. Okafor) and add field covering_for='3'. Confirmed appointments stay with provider 3 (clients were notified), and past appointments are history. Nothing else changes.",
+  "instruction": "Dr. Priya Natarajan (provider id 3) has called in sick. The front desk must handle the same-day and future coverage in a single batch under the episode batch code. (1) For every appointment with status 'scheduled' that belongs to provider 3 and has an appointment_date on or after the episode date, reassign it to the covering veterinarian Dr. Sam Okafor (provider id 4) and record covering_for='3'. (2) For each such appointment whose appointment_date equals the episode date (same-day reschedules), also push one outbound SMS communications row to the owner: channel 'sms', direction 'outbound', subject 'Provider reschedule notice <batch_code>', body 'Dr. Natarajan is out today. Your <start_time> appointment for <PatientName> is now with Dr. Okafor. Reply OK or call to reschedule.', logged_by 'system', occurred_at the episode timestamp, with owner_id and patient_id populated from the patient. (3) For each same-day reschedule, also push one reminder_queue row: kind 'appointment_reschedule', status 'queued', due_date the episode date, message 'Reschedule call: <PatientName> at <start_time> moved from provider 3 to provider 4.', queued_by 'system', queued_at the episode timestamp, with patient_id, owner_id, and appointment_id. (4) Leave confirmed appointments, completed/no_show/checked_in appointments, other providers' appointments, and all past appointments untouched. All changes are idempotent: a second run must reach the exact same end-state.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps must be measured against a live container in the QC session; do not set final values without a real gold run.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_appointments"
+    "veterinary_clinic_system_appointments",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_reminder_queue"
   ],
   "success_criteria": {
-    "summary": "From snapshot: provider 3, status scheduled, dp(appointment_date)>=ep -> provider_id=='4' + covering_for=='3'; all other appointments byte-identical; count 46.",
+    "summary": "All provider-3 scheduled appointments with dp(appointment_date)>=ep are reassigned to provider 4 with covering_for='3'. Same-day ones (dp(date)==ep) each produce one new SMS communications row and one new reminder_queue row. Confirmed, past, completed, no_show, checked_in, and other providers' appointments are unchanged. Seeded communications and reminder_queue rows are unchanged. Dual-path (raw-row Python filter + SQL) checks on the count of moved, same-day, and untouched rows.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: provider 3, status scheduled, dp(appointment_date)>=ep -> provider_id=='4' + covering_for=='3'; all other appointments byte-identical; count 46."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "(see verifier.py)", "expect": "exact per-appointment provider/covering_for fields, plus one comm and one reminder per same-day reschedule, plus seeded row preservation" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_appointments", "expect": "every aggregate count (moved, same-day, untouched) is computed both by raw-row Python filter and independent SQL and the two agree" }
     ]
   },
+  "hazards": [
+    "Provider 3 has confirmed future/same-day appointments (e.g., snapshot row id 39 is provider 3, status 'confirmed', appointment_date 2026-09-27; id 112 is provider 3, status 'confirmed', appointment_date 2026-09-30). These look like they should move because they belong to the sick provider, but the mission only touches 'scheduled' appointments. A solution that moves all of provider 3's future appointments will corrupt these decoy rows.",
+    "Provider 3 has scheduled appointments with dates before the episode date (e.g., snapshot row id 10 is provider 3, status 'scheduled', appointment_date 2026-09-04; id 26 is provider 3, status 'scheduled', appointment_date 2026-09-20; id 32 is provider 3, status 'scheduled', appointment_date 2026-09-17). These are past/historical and must stay untouched. An over-broad 'all provider 3 scheduled' filter that ignores the episode date will modify them.",
+    "Provider 4 and other providers have scheduled/confirmed future appointments (e.g., snapshot row id 35 is provider 4, status 'scheduled', appointment_date 2026-10-01; id 133 is provider 1, status 'scheduled', appointment_date 2026-09-27). These are decoys that must not be reassigned or gain a covering_for field.",
+    "The reminder_queue seed contains rows of unrelated kinds: id 1 and 2 are 'vaccination_due' queued, id 3 is 'invoice_overdue' already sent, id 4 is 'boarding_checkin' queued. A solution that deletes the whole queue or overwrites by index will destroy these decoys. The new appointment_reschedule rows must be distinguished by kind and batch_code so the verifier can tell them apart from the seeded rows.",
+    "The same-day reschedule logic depends on exact date equality (dp(appointment_date) == ep), not 'today or later'. Appointments on the episode date with status 'scheduled' are both reassigned and produce comms/reminders; future-dated reschedules produce only the reassignment. An off-by-one boundary (>= vs >) changes which rows generate the extra artifacts.",
+    "Multi-pet owner identity matters for the communications rows: the message includes the patient's name, and the verifier matches by patient_id, not by body text, because multiple pets of the same owner could share a name.",
+    "Idempotency on re-run: deleting and re-creating the batch's own communications and reminder_queue rows (keyed by batch_code and appointment_id) is required so a second run does not double-push and the state remains byte-identical to the first run."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary clinic provider sick call same day appointment rescheduling coverage protocol front desk",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Veterinary Emergency Triage: Managing After-Hours Calls | FrontDesk (frontdesk.care)",
+          "Appointments | Katy Pet Wellness Solutions (katypetvet.com)",
+          "Pet Urgent Care in Bend, OR | Pawtown Veterinary Care (pawtownvet.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Status-conditioned partial migration with a provenance field; moving confirmed rows is the tempting wrong answer."
+    "uniqueness_searches": [
+      {
+        "query": "same day reschedule block veterinary appointment covering provider RL benchmark task",
+        "top_results": [
+          "Scheduling Veterinary Appointments | NEU CS3620 (course.khoury.northeastern.edu)",
+          "Emergency Walk-In Schedule Rebalancing: AI + Software Workflow Blueprint | ITQlick (www.itqlick.com)",
+          "Veterinary Surgery Suite Block Scheduling Tool | RationalGo (rationalgo.ai)"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses a provider-coverage update with same-day owner notification and a queue-reminder creation, all batched by nonce and idempotent. The verification requires exact per-appointment identity, dual-path counts, and preservation of unrelated queue/communications rows at 10x appointment volume. No public benchmark combines sick-provider rescheduling with owner SMS and reminder-queue creation in one task with this verification structure."
   }
 }

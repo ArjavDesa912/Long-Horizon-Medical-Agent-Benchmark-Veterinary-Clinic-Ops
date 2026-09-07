@@ -1,17 +1,19 @@
-# 012_boarding_checkout_cleaning_cycle — REDTEAM notes
+# 012_boarding_checkout_cleaning_cycle — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Process departure for the checked-in boarding guest whose check_out date is earliest: set that reservation's status to 'checked_out', and move its run through the standard turnover — status 'cleaning' with current_patient_id cleared to null. Other guests stay put; touch no other rows.
+Run the evening checkout and cleaning cycle. For every checked_in reservation whose check_out is on or before the episode date, check it out, set its run to cleaning with the occupant cleared, create a boarding invoice from the fee schedule, send the owner an email, and push a checkout manifest in `ops_reports`.
 
 ## Why this is hard / unique
-Turnover state machine (occupied→cleaning, not straight to available) matches real kennel practice; nulling the occupant is the step agents skip.
+- Multi-guest checkout with invoice generation and run-state machine.
+- Fee-schedule join required to compute the correct invoice total.
+- Run must be 'cleaning' after checkout, not immediately 'available'.
+- Dual-path verification of total nights and total revenue.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- **Date ordering and scope**: the five checked_in guests have check_out dates 2026-09-06 (three guests), 2026-09-07, and 2026-09-09. They must be processed in ascending `(check_out, id)` order.
+- **Run state machine**: runs must become `cleaning` with `current_patient_id` cleared. A shortcut to `available` fails.
+- **Fee schedule lookup**: every location's fee schedule has a `BOARD-NIGHT` item priced at 38, but the invoice must be derived from that live data, not a hardcoded constant.
+- **Invoice and communication deduplication**: `invoice_number` and email subject are keyed by the live `batch_code`, so a second run must skip existing invoices and emails and overwrite the manifest row.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks against a real container before this task ships.

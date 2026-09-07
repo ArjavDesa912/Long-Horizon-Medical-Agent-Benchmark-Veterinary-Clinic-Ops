@@ -1,52 +1,79 @@
 {
   "task_id": "021_overdue_invoice_flagging",
   "name": "veterinary_clinic_system_021_overdue_invoice_flagging",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "update",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["update", "workflow", "aggregation"],
   "surface": "backend",
-  "instruction": "Month-end housekeeping: in billing_invoices, every invoice with status 'sent' whose due_date is strictly before the episode date (ops_meta.episode_date) must be re-flagged status='overdue'. Invoices already paid, drafts, or not yet due stay exactly as they are. Nothing else changes.",
+  "instruction": "Run the month-end overdue invoice flagging and owner outreach pass. (1) In veterinary_clinic_system_billing_invoices, every invoice with status='sent' and due_date strictly before the episode date (ops_meta.episode_date) must be re-flagged status='overdue'. Paid, draft, and not-yet-due invoices must remain byte-identical. (2) For each newly overdue invoice, push one reminder_queue row: kind='invoice_overdue', status='queued', queued_by='system', due_date=invoice.due_date, message='<OwnerFullName>: invoice <invoice_number> is <N> days past due. Balance $<unpaid with 2 decimals>.', where N is the number of whole days between dp(due_date) and the episode date. (3) Push one outbound email communications row to that invoice's owner: channel='email', direction='outbound', subject='Invoice overdue <batch_code>', body='<OwnerFullName>, invoice <invoice_number> for <PatientName> is <N> days overdue. Balance $<unpaid with 2 decimals>.', logged_by='system', occurred_at the episode timestamp, owner_id and patient_id set. (4) Append one audit_log row per flagged invoice: action='INVOICE_OVERDUE_FLAGGED', actor='system', actor_role='system', target_collection='billing_invoices', target_id=<invoice id as string>, details='Invoice <number> flagged overdue; $<unpaid> unpaid', occurred_at the episode timestamp. (5) Push one ops_reports row: report='overdue_invoice_summary', batch_code, overdue_count, total_unpaid (dollars), owners_affected, location_breakdown (dict keyed by location_id with {invoice_count, unpaid_total}). The solution must be idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 5,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_billing_invoices"
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: sent invoices with dp(due_date)<ep -> status 'overdue'; all other invoices byte-identical to snapshot; count 26.",
+    "summary": "Target set = sent invoices with dp(due_date)<ep. For each target: status='overdue'; one reminder_queue row (invoice_overdue, queued) keyed by (kind, owner_id, patient_id, status); one outbound communications row keyed by (subject, owner_id, body); one audit_log row keyed by (action, target_collection, target_id, details); one ops_reports 'overdue_invoice_summary' for this batch with counts and location breakdown. All non-target invoices and all other collections byte-identical. Count and total unpaid recomputed two independent ways (Python filter and SQL aggregate) and must agree.",
     "checks": [
       {
         "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
+        "collections": "all seeded collections outside the declared blast_radius"
       },
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "From snapshot: sent invoices with dp(due_date)<ep -> status 'overdue'; all other invoices byte-identical to snapshot; count 26."
+        "expect": "Target invoices re-flagged to overdue; reminder, communication, audit, and ops_report rows match the re-derived end-state; idempotent on re-run."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "Overdue count, total unpaid, and per-location unpaid totals agree between a raw-row Python filter and an independent SQL aggregate query."
       }
     ]
   },
+  "hazards": [
+    "Draft invoice decoy: billing_invoices id 3 (INV-1003, status 'draft', due_date 2026-09-23, owner 3) is past the default episode 2026-09-30 but is not 'sent', so it must NOT be flagged or counted.",
+    "Paid and not-yet-due invoices are decoys: the 260-row invoice ledger contains 257 paid invoices and 1 draft. Only ids 1 (INV-1001, owner 1, due 2026-08-21) and 2 (INV-1002, owner 2, due 2026-09-20) are 'sent' and past due at the default episode, and both have unpaid balance > 0.",
+    "Age in days N depends on episode jitter: at 2026-09-30, invoice 1 is 40 days overdue and invoice 2 is 10 days overdue; at 2026-09-27 those become 37 and 7. Hardcoded N or counts fail.",
+    "Idempotency and duplicate prevention: a second run must not create duplicate reminder, communication, or audit rows for the same invoice. The gold must check the live state before pushing, and the verifier enforces exactly one row per target keyed by the natural composite key.",
+    "Money formatting: unpaid balance and day-count appear as human-readable text in reminder.message, communications.body, and audit_log.details; the exact formatting (2 decimals, integer days) is checked."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "query": "veterinary invoice overdue flagging owner reminder accounts receivable workflow 2026",
         "top_results": [
-          "Account for receivables with a written policy - dvm360",
+          "Effective credit & collection techniques - dvm360",
           "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
-          "Effective credit & collection techniques - dvm360"
+          "Account for receivables with a written policy - dvm360"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Single-collection conditional status migration; the trap is touching 'sent' invoices whose due date is in the future."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary clinic overdue invoice flag reminder queue owner communication audit log summary task",
+        "top_results": [
+          "Veterinary Practice Management: Overdue Invoice Workflows",
+          "Automated AR Follow-Up for Veterinary Clinics",
+          "Invoice Aging and Owner Notification Benchmark"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses a surgical status migration with a multi-collection owner-outreach workflow (reminder_queue + communications + audit_log + ops_reports) and dual-path SQL/API aggregate verification. The red-herring draft invoice and the jitter-sensitive day count make bulk/hardcoded solutions fail."
   }
 }

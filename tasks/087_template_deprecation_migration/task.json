@@ -1,28 +1,32 @@
 {
   "task_id": "087_template_deprecation_migration",
   "name": "veterinary_clinic_system_087_template_deprecation_migration",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "update",
-  "surface": "frontend",
-  "instruction": "The SMS channel for vaccination reminders is being retired in favor of email. Update the reminder_templates row named 'Vaccination overdue (SMS)': set channel 'email', set active false, and append to its message_template the suffix ' (migrated from SMS <batch_code>)'. All other templates stay byte-identical.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["update", "report", "workflow"],
+  "surface": "backend",
+  "instruction": "The practice is retiring the SMS channel for all vaccination-related reminder templates. Migrate every reminder_templates row whose channel is 'sms' and whose trigger is 'vaccination_due': set channel to 'email', set active to false, and append the exact suffix ' (migrated from SMS <batch_code>)' to the existing message_template. Do not touch appointment or email templates. After migration, create one ops_reports row report='template_migration' with batch_code, migrated (count), migrated_ids (sorted list of ids), and changelog (array of {id, name, old_channel, new_channel, old_message_template, new_message_template}). Also append one audit_log entry documenting the migration. All other templates must remain byte-identical.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_reminder_templates"
+    "veterinary_clinic_system_reminder_templates",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Assert that template row has channel email, active false, message_template == snapshot template + exact suffix with nonce; other 4 rows byte-identical; count 5.",
+    "summary": "All target SMS vaccination templates are updated (channel='email', active=false, message_template appended with the exact suffix). Non-target templates (including the SMS appointment reminder) are byte-identical. One ops_reports template_migration row and one audit_log entry document the migration with the batch code and sorted ids.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +35,43 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Assert that template row has channel email, active false, message_template == snapshot template + exact suffix with nonce; other 4 rows byte-identical; count 5."
+        "expect": "Updated templates, one ops_reports row, and one audit_log entry; everything else unchanged."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_reminder_templates",
+        "expect": "The set of migrated templates is computed both by raw-row filter and by independent SQL WHERE channel='sms' AND trigger='vaccination_due' and the two sets agree."
       }
     ]
   },
+  "hazards": [
+    "reminder_templates id=5 ('Appointment reminder') has channel='sms' but trigger='appointment_reminder', not 'vaccination_due'. It is a decoy that must NOT be migrated; a channel-only filter will touch it and fail.",
+    "reminder_templates id=2 ('Vaccination overdue (SMS)') is the only row that matches both channel='sms' and trigger='vaccination_due' and is the correct migration target.",
+    "The other three templates (ids 1, 3, 4) are channel='email' and must remain byte-identical; a solution that migrates all templates or flips active on email templates fails.",
+    "The message_template must be appended, not replaced, and the suffix must be exactly ' (migrated from SMS <batch_code>)' with the live batch code.",
+    "The migration must set active to false and channel to 'email' on the target; flipping only one field or using the wrong channel fails."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary reminder template SMS retirement migrate to email vaccination reminders",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "SMS vs Email Client Reminders in Veterinary Practice - VetTriage",
+          "Veterinary Practice Communication Channel Migration - Vetstoria",
+          "Retiring SMS Reminders: A Veterinary Practice Guide - DVM360"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "String-append migration (not replacement) on a template with a nonce marker; exactness of the suffix string."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary reminder template migration audit log batch code benchmark task",
+        "top_results": [
+          "Practice Management Template Migration Workflow",
+          "Veterinary Communication Template Audit",
+          "Reminder Channel Deprecation Benchmark"
+        ]
+      }
+    ],
+    "differentiation_note": "Requires filtering by both channel and trigger, exact string-append with a nonce suffix, and cross-checks against an SMS appointment-reminder decoy. Adds ops_reports and audit_log outputs, making it a multi-collection workflow."
   }
 }

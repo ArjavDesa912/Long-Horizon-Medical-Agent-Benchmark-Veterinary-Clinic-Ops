@@ -1,17 +1,19 @@
-# 075_sql_vs_api_crosscheck — REDTEAM notes
+# 075_sql_vs_api_crosscheck — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Trust but verify the SQL endpoint. Compute two ways and report agreement: (a) via GET /v1/query on appointments, count rows per status; (b) via POST /v1/sql/query with SELECT status, COUNT(*) ... GROUP BY status on the same table (veterinary_clinic_system_appointments). Create one ops_reports row {report: 'sql_crosscheck', batch_code, api_counts: <JSON object status->count>, sql_counts: <JSON object status->count>, agree: <true iff identical>}.
+Run a full-database row-count parity audit between the paginated REST API (`GET /v1/query/{collection}`) and the service-admin SQL endpoint (`POST /v1/sql/query`) for all 24 seeded business collections. Write per-collection `sql_crosscheck` rows and one `sql_crosscheck_summary` row keyed by the episode `batch_code`.
 
 ## Why this is hard / unique
-Dual-path verification (REST vs SQL) — the agent must actually run both channels, and the SQL path is service-admin gated (forces correct credential choice).
+- **Whole-database scope**, not a single table: the agent must enumerate collections, know the prefix difference between REST slugs and SQL table names, and paginate large collections.
+- **Dual-path derivation**: every count is computed independently via REST and SQL and must agree before the agent's written value is accepted.
+- **Runtime-table red herring**: `/v1/tables` returns `ops_meta` and, after first write, `ops_reports`. Those must be excluded or the report row count and totals are wrong.
+- **Idempotent overwrite**: the agent must delete prior crosscheck rows for this batch before writing, otherwise a re-run would duplicate.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+1. `ops_meta` and `ops_reports` are not in the host-side seed snapshot, which contains exactly 24 collections. Including them would produce >24 report rows.
+2. SQL table names are the full `veterinary_clinic_system_*` names (e.g., `veterinary_clinic_system_appointments`), while REST collection sligs are the short names; the snapshot's collection keys confirm the full names.
+3. Small collections are confirmable: `audit_log` (4 rows), `controlled_substance_log` (12 rows), `reminder_queue` (4 rows) in the snapshot. Inferring counts from a single page or metadata would misreport these.
+4. Large-collection parity is confirmable: `appointments` 548, `vaccinations` 600, `patients` 300, `owners` 220, `billing_invoices` 260 per the snapshot; any hardcoded count will fail unless it is freshly derived.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

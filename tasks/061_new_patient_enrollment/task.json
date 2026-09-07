@@ -1,52 +1,76 @@
 {
   "task_id": "061_new_patient_enrollment",
   "name": "veterinary_clinic_system_061_new_patient_enrollment",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "create",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["create", "workflow", "reconciliation"],
   "surface": "websearch",
-  "instruction": "Enroll a new patient: 'Maple Syrup', a female spayed rabbit (species 'exotic', breed 'Holland Lop'), born 2023-02-14, weight 1.8 kg, owned by owner id 3 (Ingrid Larsson) at location 1. Give her a valid ISO 11784 microchip id: 15 digits starting with manufacturer code 985 followed by 12 digits \u2014 use 985112 followed by zero-padded digits of 900001 (verify the ISO 11784 format online if unsure). status 'active', alerts [], spayed_neutered true, dob as an ISO timestamp at midnight UTC, created_at = episode timestamp.",
+  "instruction": "Complete the new-patient intake bundle under the episode batch code. The patient is 'Maple Syrup', a female spayed Holland Lop rabbit (species 'exotic'), born 2023-02-14, 1.8 kg, owned by owner id 3 (Ingrid Larsson) at location 1. Use the ISO 11784 15-digit microchip id 985112900001234. Create the patient record with status 'active', alerts [], dob at midnight UTC, and created_at at the episode timestamp. Then book a wellness exam on the episode date, 09:00\u201309:30, in Exam 2 at location 1, with the location-1 veterinarian whose specialties include 'exotics' (resolve this provider from the providers table; do not hardcode the id). Create a draft billing_estimates row for this patient/owner using the location-1 fee-schedule WELL-EXAM item, estimate_number 'EST-NP-<batch_code>', status 'draft', created_date and expires_date set to the episode date, and total_amount equal to the schedule price. Push a welcome communications row to owner id 3 with subject 'Welcome \u2014 Maple Syrup (<batch_code>)' and a body that includes the appointment date/time, the resolved provider name, and the exact estimate total. Append an audit_log row {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'PATIENT_ENROLLED', target_collection: 'patients', target_id: <new patient id>, details: 'New patient intake <batch_code>: Maple Syrup for owner 3.', occurred_at: episode timestamp}. The whole bundle must be idempotent so a re-run does not create duplicate records.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 20,
-  "par_steps": 5,
+  "max_steps": null,
+  "par_steps": null,
+  "_par_steps_note": "placeholder -- measure via live gold run in QC session",
+  "_max_steps_note": "placeholder -- set to roughly par_steps * 1.5 after live measurement",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_patients"
+    "veterinary_clinic_system_patients",
+    "veterinary_clinic_system_appointments",
+    "veterinary_clinic_system_billing_estimates",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Assert exactly one new patient with exact fields; microchip regex ^985112900001$ (15 digits, 985 prefix); count 31; seeded 30 byte-identical.",
+    "summary": "Exactly one new patient with the given exact fields and a 15-digit microchip. Exactly one appointment on the episode date 09:00-09:30 Exam 2 with the location-1 exotics provider. Exactly one draft estimate for the new patient/owner with the WELL-EXAM line item and price drawn from the location-1 fee schedule. Exactly one welcome communications row and one PATIENT_ENROLLED audit_log row. All counts are verified via Python and SQL dual paths where applicable. No other collections are modified.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Assert exactly one new patient with exact fields; microchip regex ^985112900001$ (15 digits, 985 prefix); count 31; seeded 30 byte-identical."
-      }
+      {"type": "canary_hash", "collections": "all seeded collections outside blast_radius"},
+      {"type": "derived_rows", "collection": "patients, appointments, billing_estimates, communications, audit_log", "expect": "one new row per collection with exact fields, provider resolved from live data, price from fee schedule"},
+      {"type": "dual_path", "collection": "veterinary_clinic_system_billing_estimates / veterinary_clinic_system_fee_schedules", "expect": "estimate count and total recomputed via SQL and Python"}
     ]
   },
+  "hazards": [
+    "microchip-format decoy: every one of the 300 existing patients has a non-compliant microchip (299 are exactly 12 digits, e.g., id 1 '985112100000'; id 30 has 11 digits '98511232965'). The new patient must use the explicit 15-digit id 985112900001234; a 12-digit chip fails ISO 11784 verification.",
+    "provider resolution hazard: only one location-1 veterinarian has 'exotics' in specialties (provider id 2, Dr. Marcus Chen). Booking with any other provider or room/time fails the appointment constraints.",
+    "existing-patient collision: owner 3 already has a transferred patient id 27 (Poppy, feline) and active patients; the new rabbit must be a new row, not an update or reactivation.",
+    "fee-schedule lookup: the WELL-EXAM price must be read from the location-1 fee_schedules.items array, not hardcoded or guessed.",
+    "idempotency: the appointment, estimate, communications, and audit rows must be keyed by the batch code so a re-run does not duplicate them."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "ISO 11784 pet microchip 15 digit format country code 985 manufacturer",
+        "query": "ISO 11784 pet microchip 15 digit format manufacturer code 985",
         "top_results": [
           "Manufacturer's ISO Codes (Alberta Animal Health Source PDF)",
           "ISO 11784:2024 Code structure (ISO preview)",
           "Microchipping - The Importance of ISO (WSAVA PDF)"
         ]
+      },
+      {
+        "query": "new patient intake workflow veterinary practice wellness exam estimate welcome communication",
+        "top_results": [
+          "New Client/Patient Workflow Best Practices (aaha.org)",
+          "Veterinary Onboarding: From Estimate to First Appointment (ezyvet.com)",
+          "Practice Management Intake Automation (digitail.com)"
+        ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Microchip format requires the ISO 11784 15-digit convention; agents emit arbitrary strings without the research step."
+    "uniqueness_searches": [
+      {
+        "query": "RL environment task enroll new patient schedule appointment create estimate audit log multi-collection",
+        "top_results": [
+          "Veterinary clinic ops benchmark tasks (paperform.co)",
+          "Agentic workflow benchmark: patient intake bundle (ustechautomations.com)",
+          "Long-horizon medical agent benchmark veterinary clinic (github.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Multi-step new-patient bundle that requires resolving a provider by specialty, looking up a fee-schedule price, booking a constrained appointment slot, and producing cross-collection audit/communication records. The microchip format check and idempotency-by-batch separate it from simple create tasks."
   }
 }

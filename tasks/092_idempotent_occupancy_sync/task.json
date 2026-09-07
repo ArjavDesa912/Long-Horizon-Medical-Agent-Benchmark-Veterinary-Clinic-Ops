@@ -1,28 +1,31 @@
 {
   "task_id": "092_idempotent_occupancy_sync",
   "name": "veterinary_clinic_system_092_idempotent_occupancy_sync",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "idempotency",
-  "surface": "frontend",
-  "instruction": "Sync the boarding board so runs exactly mirror the reservation book, idempotently: after your changes, a run must be 'occupied' with current_patient_id set IFF a checked_in reservation references it (patient from that reservation); runs with no checked_in reservation must be 'available' with current_patient_id null \u2014 EXCEPT runs whose status is 'maintenance', which stay 'maintenance' with null occupant. Add field synced='<batch_code>' ONLY to runs you actually changed. Running the sync twice must change nothing the second time (the tag must already match the current batch_code \u2014 do not re-stamp).",
+  "category": ["idempotency", "reconciliation", "workflow"],
+  "surface": "backend",
+  "instruction": "Sync the boarding occupancy board against the reservation book as of the episode date, idempotently. A run is 'occupied' with current_patient_id set to a reservation's patient only when there is exactly one active checked_in reservation for that run; a reservation is active when status='checked_in' AND check_in <= episode_date < check_out. Otherwise the run must be 'available' with current_patient_id empty. Update only the runs whose status or current_patient_id actually need to change, and set synced='<batch_code>' only on those changed runs. After the sync, append exactly one audit_log row {action: 'BOARDING_RUNS_SYNCED', actor: 'system', actor_role: 'system', target_collection: 'boarding_runs', target_id: 'sync-<batch_code>', details: 'Synced <N> runs to reservation book as of <episode date>.', occurred_at: episode timestamp}. A second run with the same batch code must change no runs and must not append a second audit log row.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 12,
+  "max_steps": null,
+  "_max_steps_note": "set after live gold measurement in QC session",
+  "par_steps": null,
+  "_par_steps_note": "set after live gold measurement in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_boarding_runs"
+    "veterinary_clinic_system_boarding_runs",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Compute expected run state from live reservations; assert invariant holds for all 17 runs; assert synced tags == nonce on exactly the diff set computed from snapshot; all other runs byte-identical. QC: gold twice -> second pass zero changes (verified by rerunning verifier and by identical hashes).",
+    "summary": "Each of the 17 runs matches the active reservation set as of the episode date; only runs that differ from seed have synced=batch; unchanged runs have no synced field; exactly one audit_log sync record; active reservation set computed two independent ways (API filter and SQL range query) and must agree.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +34,43 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Compute expected run state from live reservations; assert invariant holds for all 17 runs; assert synced tags == nonce on exactly the diff set computed from snapshot; all other runs byte-identical. QC"
+        "expect": "Run status and occupant derived from active checked_in reservations; synced only on changed runs; one audit_log row; canary on all other collections."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_boarding_reservations",
+        "expect": "active run set computed by API Python filter and SQL range query must agree"
       }
     ]
   },
+  "hazards": [
+    "The 5 checked_in boarding_reservations (ids 1-5) have check_out dates 2026-09-06 and 2026-09-07, all before the episode-date jitter window (2026-09-27..2026-10-03). A solution that treats any checked_in reservation as active without checking check_in <= episode_date < check_out will leave runs 1-5 occupied and fail.",
+    "There are 43 'reserved' and 92 'checked_out' boarding_reservations with various dates and run_id values that overlap the boarding_runs. A solution must ignore reservations whose status is not checked_in or whose date range does not cover the episode.",
+    "All 17 boarding_runs are in the snapshot: runs 1-5 are 'occupied' with current_patient_id 2/4/6/8/10; runs 6-17 are 'available'. A solution that stamps synced=batch on every run (not just the ones whose state changes) will set synced on runs 6-17 and fail.",
+    "The expected final state has all runs available with empty current_patient_id. A solution that sets current_patient_id to null with a literal SQL NULL but leaves it as the string 'None' or as an uncast value will fail the string/None canary.",
+    "A solution that appends an audit log row on every run, or on every run even when no state changed, will create duplicate audit rows and fail."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "kennel boarding run occupancy sync reservation book reconciliation veterinary",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Boarding Kennel Software with Online Bookings (kennelbooker.com)",
+          "Boarding Software — Animal Friends OS (animalfriendsos.com)",
+          "Pet Boarding Daycare Grooming Bookkeeping: Run-Night Revenue (beancount.io)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Convergent sync with change-only tagging \u2014 second-run no-op is directly verified; over-eager re-tagging fails."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary boarding run occupancy idempotent sync audit log episode date benchmark task",
+        "top_results": [
+          "Veterinary Practice Reporting Every Week (digitail.com)",
+          "Veterinary Clinic Compliance Audit Checklist (paperform.co)",
+          "Veterinary Automation Playbook 2026 (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Turns a simple occupancy flag sync into a date-windowed reconciliation between boarding_reservations and boarding_runs, with change-only synced tagging and a single audit_log record. The verifier cross-checks the active reservation set via API and SQL and enforces that only changed runs carry the synced watermark."
   }
 }

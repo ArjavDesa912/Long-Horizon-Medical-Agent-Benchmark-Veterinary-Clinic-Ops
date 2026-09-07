@@ -1,28 +1,31 @@
 {
   "task_id": "013_daily_log_completion",
   "name": "veterinary_clinic_system_013_daily_log_completion",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "create",
-  "surface": "frontend",
-  "instruction": "Kennel staff finished the evening round. For every reservation currently checked_in, make sure a boarding_daily_log row exists for the episode date with fed_am=true, fed_pm=true, medicated and walked reflecting that reservation's instructions (medicated=true only if medication_instructions is not 'None'; walked=true for all dogs \u2014 run_type 'kennel' or 'large_dog' \u2014 and false for cattery guests), notes='', and logged_by='Hank Willis'. If a row for that reservation and date already exists, update it to these values instead of creating a duplicate. Seeded log rows for other dates must remain untouched.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "create", "aggregation"],
+  "surface": "backend",
+  "instruction": "Kennel staff finished the evening round. For every reservation currently checked_in, make sure a boarding_daily_log row exists for the episode date with fed_am=true, fed_pm=true, notes='', and logged_by='Hank Willis'. The two remaining flags must be derived from live data, not the reservation text alone: medicated is true only if the reservation has non-empty medication_instructions that are not the literal string 'None' AND the patient has at least one active medication in the medications collection; walked is true only if the assigned run's run_type is 'kennel' or 'large_dog'. If a log row for that reservation and date already exists, update it to these values; otherwise create it. Finally, push one ops_reports row with report='boarding_daily_census' and the live batch_code, containing total_checked_in, total_medicated, total_walked, and by_location (per location: count, medicated, walked) and by_run_type (count, medicated, walked) and by_species (per patient species: count, medicated, walked). Overwrite the report if it already exists. The flow is idempotent and must not touch log rows for other dates or reservations that are not checked_in.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_boarding_daily_log"
+    "veterinary_clinic_system_boarding_daily_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Expected: for each checked_in reservation (5 from snapshot), exactly one log row with dp(log_date)==episode_date and the rule-computed booleans (join run type via run_id). Assert no reservation has 2 rows for the episode date; assert seeded rows for other dates unchanged; total == 10 + (5 - preexisting-episode-rows).",
+    "summary": "Episode date from ops_meta. For each checked_in reservation there is exactly one boarding_daily_log row for the episode date. fed_am/fed_pm are true, notes empty, logged_by 'Hank Willis'. medicated is true only with active medication instructions plus an active medication record for that patient; walked is true only when the run's run_type is 'kennel' or 'large_dog'. The ops_reports boarding_daily_census row has the correct total and breakdowns, all verified via dual raw-row and SQL paths. Log rows for other reservations/dates are byte-identical to the seed snapshot. All collections outside the blast radius are byte-identical.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,31 +33,48 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Expected: for each checked_in reservation (5 from snapshot), exactly one log row with dp(log_date)==episode_date and the rule-computed booleans (join run type via run_id). Assert no reservation has 2 "
+        "collection": "veterinary_clinic_system_boarding_daily_log",
+        "expect": "Each checked_in reservation has exactly one log row for the episode date with correct booleans; all other log rows unchanged"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one boarding_daily_census row with correct totals and breakdowns"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_boarding_reservations",
+        "expect": "Every aggregate in ops_reports agrees between a raw-row Python filter and an independent SQL GROUP BY/COUNT query"
       }
     ]
   },
+  "hazards": [
+    "Medication-text red herring: four of the five checked_in reservations have medication_instructions that are not 'None' (e.g., 'Eye drops both eyes BID', '1 tramadol tablet hidden in cheese at PM feed'), but none of the five checked_in patients has an active medication record. A solution that only reads the reservation text sets medicated=true and fails.",
+    "Run-type vs. species: one checked_in guest is feline (patient 8) but is in a kennel run, so walked=true under the run-type rule. A solution that keys walked on species will fail for this row.",
+    "Upsert, not duplicate: the seed boarding_daily_log already has 10 rows (two per checked_in reservation, one for 2026-09-03 and one for 2026-09-04). Only the row for the episode date may be created or updated; a blind insert for a checked_in reservation that already has an episode-date row would duplicate.",
+    "Episode-date boundary: the episode date jitters ±3 days. At any jitter there are exactly five checked_in reservations, but the episode date itself changes, so the log_date to match is the live episode date, not a fixed date."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "kennel daily log medication administration boarding dogs walked large_dog cattery",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Boarding Kennel Daily Care Log — Free Printable PDF | PrintableMake",
+          "Pet Boarding Facility Daily Care Report Template | Paperform",
+          "Veterinary Boarding Kennel Daily Care and Safety Checklist | POPProbe"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "boarding daily log fed_am fed_pm medicated walked kennel evening round software",
+        "query": "kennel daily log active medication reconciliation run type walked cattery",
         "top_results": [
-          "PawOps — Dog Boarding & Kennel Management Software",
-          "Pet Boarding Management Software | PetConnect"
+          "Pet Boarding Facility Daily Care Report Template | Paperform",
+          "Boarding Kennel Daily Care Log — Free Printable PDF | PrintableMake",
+          "Kennel Software for UK Boarding Facilities | MyPetCare"
         ]
       }
     ],
-    "differentiation_note": "Upsert (not blind insert) + instruction-conditional booleans through a reservation\u2192run join; duplicate-creating agents fail the uniqueness check."
+    "differentiation_note": "Upgrades simple daily-log completion into a cross-collection medication reconciliation: medicated requires both reservation instructions and an active medication record, walked depends on run type not species, and a dual-path verified census report is produced."
   }
 }

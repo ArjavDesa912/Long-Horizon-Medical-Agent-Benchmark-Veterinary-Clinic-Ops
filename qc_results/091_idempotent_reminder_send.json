@@ -4,15 +4,15 @@
     "noop": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: reminder_queue count: expected 7, found 4"
+        "FAIL: reminder_queue count: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 0.9
+      "seconds": 2.0
     },
     "random": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: reminder_queue count: expected 7, found 4"
+        "FAIL: reminder_queue count: mismatch"
       ],
       "stderr_tail": [],
       "seconds": 0.2
@@ -20,16 +20,18 @@
     "hardcode": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: reminder_queue count: expected 7, found 4"
+        "FAIL: reminder_queue count: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 0.2
+      "seconds": 0.3
     },
     "gold": {
       "exit": 0,
-      "stdout_tail": [],
+      "stdout_tail": [
+        "gold done in 108 API calls"
+      ],
       "stderr_tail": [],
-      "seconds": 0.8
+      "seconds": 5.8
     },
     "verify_after_gold": {
       "exit": 0,
@@ -37,7 +39,7 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 5.1
+      "seconds": 11.4
     },
     "verify_idempotent": {
       "exit": 0,
@@ -45,31 +47,34 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 0.3
+      "seconds": 0.4
     },
-    "gold_second_run": {
+    "gold_alt": {
       "exit": 0,
-      "stdout_tail": [],
+      "stdout_tail": [
+        "gold_alt done in 108 API calls"
+      ],
       "stderr_tail": [],
-      "seconds": 1.2
+      "seconds": 6.8
     },
-    "verify_after_second_gold": {
+    "verify_after_gold_alt": {
       "exit": 0,
       "stdout_tail": [
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 0.3
+      "seconds": 5.5
     }
   },
-  "reset_seconds": 19.2,
-  "nonce": "EP-949CFEAF",
+  "reset_seconds": 34.7,
+  "nonce": "EP-93B9A526",
   "verdicts": {
     "noop_fail": true,
     "random_fail": true,
     "hardcode_fail": true,
     "gold_pass": true,
-    "idempotent_pass": true
+    "idempotent_pass": true,
+    "gold_alt_pass": true
   },
   "pass": true
 }

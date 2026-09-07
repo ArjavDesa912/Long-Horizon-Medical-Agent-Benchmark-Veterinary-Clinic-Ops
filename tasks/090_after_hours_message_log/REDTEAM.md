@@ -1,17 +1,19 @@
-# 090_after_hours_message_log — REDTEAM notes
+# 090_after_hours_message_log — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Log an after-hours voicemail: owner id 7 (Frank Kowalski) called about rescheduling. Push one communications row {owner_id: '7', channel: 'phone', direction: 'inbound', subject: 'After-hours voicemail <batch_code>', body: 'Requested reschedule of next appointment; called after closing.', logged_by: 'answering service', occurred_at: episode timestamp}.
+The answering service takes a voicemail from owner 7 (Frank Kowalski) after hours and the agent must execute the full after-hours triage protocol: log an inbound voicemail, look up the owner’s patient and that patient’s location, determine the on-call veterinarian for that location, send an outbound page to that DVM, and record a triage report in ops_reports.
 
 ## Why this is hard / unique
-Simple create with nonce embedding — calibration floor for the create category.
+- Multi-hop join through owners, patients, and providers with no row ids given in the instruction.
+- Two distinct communications rows with different foreign keys (patient_id vs provider_id) on a collection whose snapshot schema has neither column.
+- On-call DVM must be the veterinarian at the patient’s location, not the first provider or a hardcoded id.
+- Idempotent report upsert by batch_code.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- 160 pre-existing communications rows with repeated subjects/bodies; new rows must be matched by derived keys, not text.
+- Owner 7 → patient 10 (Willow, equine, location_id "2"); provider 9 (Lucy Tran, groomer) is also at location 2, so a role filter is required to pick provider 3 (Dr. Priya Natarajan).
+- Providers 1 and 2 are both veterinarians at location 1; a hardcoded first-veterinarian choice fails for this patient.
+- ops_reports does not exist in the snapshot; gold must tolerate a missing table on first read.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

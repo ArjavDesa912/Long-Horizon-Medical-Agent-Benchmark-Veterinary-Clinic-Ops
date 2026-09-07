@@ -1,19 +1,20 @@
 {
   "task_id": "044_provider_utilization_report",
   "name": "veterinary_clinic_system_044_provider_utilization_report",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reporting", "reconciliation"],
   "surface": "backend",
-  "instruction": "How busy is each doctor? One ops_reports row per provider with role 'veterinarian': {report: 'provider_utilization', batch_code, provider_id, provider_name, total_appointments, completed, no_shows, upcoming: <appointments with appointment_date on or after the episode date and status in ('scheduled','confirmed','checked_in')>}. Any order; only veterinarians.",
+  "instruction": "Build the provider utilization report as of the episode date. Identify every provider whose role is 'veterinarian'. For each of those providers, push exactly one ops_reports row {report: 'provider_utilization', batch_code, provider_id, provider_name, role, total_appointments, completed, no_shows, upcoming, completed_rate, no_show_rate}. Definitions: total_appointments = every appointment assigned to that provider regardless of date or status; completed = count with status 'completed'; no_shows = count with status 'no_show'; upcoming = count with appointment_date on or after the episode date and status in ('scheduled','confirmed','checked_in'); completed_rate = round(100*completed/total_appointments, 1), or 0.0 if total is 0; no_show_rate = round(100*no_shows/total_appointments, 1), or 0.0 if total is 0. Providers whose role is not 'veterinarian' are decoys and must not be in the report. No other collections may be modified.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps cannot be measured in a codegen-only session. They must be recorded from a live gold run in the QC container.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,31 +23,43 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute per veterinarian from live appointments; exact ints; rows == 4 vets; nonce.",
+    "summary": "ops_reports contains exactly one row per veterinarian provider (4 rows total) with report='provider_utilization' and batch_code. Each row's counts must match the live appointments table: total, completed, no_shows, and upcoming (date >= episode and status in scheduled/confirmed/checked_in). Rates must be rounded to one decimal and 0.0 when total is 0. Non-veterinarian providers are absent. Every aggregate is recomputed via Python filter and an independent SQL GROUP BY and both must agree with the agent's written row. All collections outside ops_reports are canary-checked.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute per veterinarian from live appointments; exact ints; rows == 4 vets; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "4 provider_utilization rows with exact counts and rates" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_appointments", "expect": "per-provider total/completed/no_show/upcoming counts agree between Python filter and SQL GROUP BY" }
     ]
   },
+  "hazards": [
+    "Only providers with role='veterinarian' may appear. The seed has 4 veterinarians (ids 1-4: Dr. Elena Alvarez, Dr. Marcus Chen, Dr. Priya Natarajan, Dr. Sam Okafor) and 5 non-vet staff (ids 5-9: vet_techs, kennel_attendants, groomer). A report that includes all 9 providers fails.",
+    "upcoming is a compound condition: appointment_date >= episode (inclusive) AND status in ('scheduled','confirmed','checked_in'). A solution that counts all future appointments regardless of status, or all scheduled/confirmed without the date filter, will inflate the count.",
+    "The episode date jitters +/-3 days, so the 'upcoming' boundary is live. Hardcoding a fixed episode date produces wrong upcoming counts.",
+    "completed_rate and no_show_rate must be rounded to one decimal; an unrounded or integer rate fails the tolerance check. For providers with total=0, both rates must be 0.0.",
+    "provider_name and role must be read from the providers collection; a hardcoded name or role fails.",
+    "total_appointments includes every appointment assigned to the provider, including those in the past and those with status 'no_show' or 'completed'. Excluding any status undercounts.",
+    "No collections outside ops_reports may be modified. The appointments and providers tables are canary-checked byte-identical."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary provider utilization report KPI appointments",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "5 Steps to Automate Daily Appointment Reports in Vet Clinics 2026 (ustechautomations.com)",
+          "Veterinary Practice KPIs Explained (veterinarybusinessguide.com)",
+          "Analytics dashboard overview | Lupa Help Center"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Role-filtered group-by with a status-set + date-window compound condition for 'upcoming'."
+    "uniqueness_searches": [
+      {
+        "query": "RL benchmark provider utilization veterinarian no_show_rate upcoming veterinary",
+        "top_results": [
+          "The Best KPIs for Veterinary Clinics in 2027 (pulserevops.com)",
+          "Practice Dashboard – IDEXX Neo",
+          "Veterinary Scheduling Software | skdul"
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 expands from a single-report v1 into a per-veterinarian utilization report with no_show_rate and completed_rate percentages rounded to one decimal, and requires dual-path derivation of every per-provider count. The 'upcoming' metric is a date + status compound condition. Non-veterinarian providers are decoys that must be excluded. The report is read-only with respect to appointments and providers; only ops_reports is written."
   }
 }

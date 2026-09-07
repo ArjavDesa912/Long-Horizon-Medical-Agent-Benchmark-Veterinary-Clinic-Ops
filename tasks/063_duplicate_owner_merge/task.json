@@ -1,19 +1,21 @@
 {
   "task_id": "063_duplicate_owner_merge",
   "name": "veterinary_clinic_system_063_duplicate_owner_merge",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "repair",
+  "category": ["repair", "workflow", "reconciliation"],
   "surface": "frontend",
-  "instruction": "Merge duplicate owner records the way the Owners screen's merge tool should. Two owners are duplicates iff their normalized phone numbers match (digits only) OR their emails match case-insensitively. For each duplicate PAIR in the seeded data: keep the record with the earlier created_at (the survivor), repoint all patients, invoices, and communications from the duplicate to the survivor, add the duplicate's balance to the survivor's, then delete the duplicate owner row and add merged_into='<survivor id>' audit trail by pushing one audit_log row {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'OWNER_MERGE', target_collection: 'owners', target_id: <deleted owner id as string>, details: 'Merged into owner <survivor id> (<batch_code>)', occurred_at: episode timestamp}. If no duplicates exist, change nothing.",
+  "instruction": "Merge duplicate owner records the way the Owners screen's merge tool should. Two owners are duplicates iff their normalized phone numbers (digits only) match OR their emails match case-insensitively. Build the full duplicate network by chaining these two signals (phone -> email -> phone). For each duplicate cluster, keep the owner with the earliest created_at (tie-break by lower id as the survivor), repoint all child records in patients, billing_invoices, billing_estimates, communications, and reminder_queue from every duplicate to the survivor, add each duplicate's balance to the survivor's balance, delete each duplicate owner row, and append one audit_log row per deleted duplicate {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'OWNER_MERGE', target_collection: 'owners', target_id: <deleted owner id>, details: 'Merged into owner <survivor id> (<batch_code>)', occurred_at: episode timestamp}. Then push one ops_reports row {report: 'owner_merge', batch_code, clusters, duplicates_removed, patients_repointed, invoices_repointed, estimates_repointed, comms_repointed, reminders_repointed} with the counts computed from the live post-merge state. If no duplicates exist, push only the ops_reports row with zero counts and no audit rows. Leave every non-duplicate owner and all other collections byte-identical.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 60,
-  "par_steps": 16,
+  "max_steps": null,
+  "par_steps": null,
+  "_par_steps_note": "placeholder -- measure via live gold run in QC session",
+  "_max_steps_note": "placeholder -- set to roughly par_steps * 1.5 after live measurement",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,35 +24,48 @@
     "veterinary_clinic_system_owners",
     "veterinary_clinic_system_patients",
     "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_billing_estimates",
     "veterinary_clinic_system_communications",
-    "veterinary_clinic_system_audit_log"
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Compute duplicate pairs from snapshot owners (phone digits / email lower). For each pair: survivor = earlier created_at; assert duplicate deleted; survivor balance == sum of both (cents); all patients/invoices/communications repointed; one audit row per merge; all other rows byte-identical; owner count == 22 - len(pairs). NOTE: audit_log added to blast radius.",
+    "summary": "Compute duplicate owner clusters from the seed owners using phone-digit and lowercased email matching with union-find. The survivor is the earliest created_at (tie-break lower id). All duplicates are deleted, all child records repointed, survivor balance is the sum (cents), and one OWNER_MERGE audit row exists per deleted duplicate. Exactly one ops_reports owner_merge row captures the live counts. No non-duplicate owner or collection outside the blast radius is modified.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Compute duplicate pairs from snapshot owners (phone digits / email lower). For each pair: survivor = earlier created_at; assert duplicate deleted; survivor balance == sum of both (cents); all patients"
-      }
+      {"type": "canary_hash", "collections": "all seeded collections outside blast_radius"},
+      {"type": "derived_rows", "collection": "owners, patients, billing_invoices, billing_estimates, communications, reminder_queue, audit_log, ops_reports", "expect": "duplicate cluster merged correctly; counts in ops_reports match live state"},
+      {"type": "dual_path", "collection": "veterinary_clinic_system_owners", "expect": "duplicate clusters and survivor selection agree between Python and SQL"}
     ]
   },
+  "hazards": [
+    "single duplicate cluster: the snapshot has one cluster of owners 1 and 22, sharing normalized phone 8285550101 but with different names, emails, addresses, and balances (owner 1 balance 134.0, owner 22 balance 0.0). A solution that requires exact full-record equality misses them.",
+    "balance-weakness hazard: because owner 22's balance is 0.0, a merge that forgets balance-summing still produces the correct survivor balance. The repointing and audit checks carry the discriminative weight.",
+    "child-record scope: owner 22 owns patients 26, 168, 170; billing_invoices 22 and 242; billing_estimates 19; communications 22; and no reminder_queue rows. Partial repointing (e.g., only patients or only invoices) leaves dangling foreign keys.",
+    "chaining hazard: the matcher must union across both phone and email, not just compare pairwise. In this data the cluster is a single phone match, but the implementation must be general.",
+    "survivor rule: the survivor is the earliest created_at, not the lower id or larger balance. Owner 1 was created at 2026-09-04T21:08:33.689878+00:00 and owner 22 at 2026-09-04T21:08:34.144830+00:00, so owner 1 is the survivor."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice owner duplicate merge workflow phone email normalization foreign key repoint",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Best Practices for Duplicate Record Management in Veterinary Practices (aaha.org)",
+          "Owner Merge and Data Integrity in PIMS (ezyvet.com)",
+          "Entity Resolution for Veterinary Client Records (digitail.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Entity resolution with normalization rules + multi-collection foreign-key repointing + balance conservation; the hardest CRUD skill set."
+    "uniqueness_searches": [
+      {
+        "query": "RL environment duplicate owner merge balance conservation multi-collection repoint audit",
+        "top_results": [
+          "Long-horizon medical agent benchmark: owner merge (github.com)",
+          "Entity resolution benchmark with audit trail (paperform.co)",
+          "Multi-table foreign-key repointing task (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Classic entity-resolution + multi-table foreign-key repointing task, expanded with a real-time ops_report and audit trail. The survivor rule and normalization make it a discriminating hard task despite the single cluster."
   }
 }

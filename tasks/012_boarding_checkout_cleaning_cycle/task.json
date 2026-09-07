@@ -1,29 +1,34 @@
 {
   "task_id": "012_boarding_checkout_cleaning_cycle",
   "name": "veterinary_clinic_system_012_boarding_checkout_cleaning_cycle",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "workflow",
-  "surface": "frontend",
-  "instruction": "Process departure for the checked-in boarding guest whose check_out date is earliest: set that reservation's status to 'checked_out', and move its run through the standard turnover \u2014 status 'cleaning' with current_patient_id cleared to null. Other guests stay put; touch no other rows.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "create", "aggregation"],
+  "surface": "backend",
+  "instruction": "Run the evening checkout and cleaning cycle. For every checked_in reservation whose check_out date is on or before the episode date, in ascending check_out order (ties by reservation id): set the reservation status to 'checked_out', set its run to 'cleaning' with current_patient_id cleared, create a boarding invoice for the stay, and send the owner an outbound email. The invoice should use invoice_number 'INV-{batch_code}-{reservation_id}', be issued on the episode date with due_date 14 days later, status 'sent', one line item 'Boarding (N nights)' with unit_price equal to N multiplied by the location's BOARD-NIGHT fee schedule price (N = (check_out - check_in).days), total_amount equal to that unit_price, and amount_paid 0. The email should have subject 'Boarding checkout — {batch_code}' and body '{PetName} checked out of {run_type} run {run_number} at {location_name}. Invoice {invoice_number} for {nights} nights (${total}).' Finally, push one ops_reports row with report='boarding_checkout_manifest' and the live batch_code, containing the episode date, checkout_count, total_nights, total_revenue, by_location (count, nights, revenue per location), and by_run_type (count per run type). Overwrite the report if it already exists. The flow is idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 7,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
     "veterinary_clinic_system_boarding_reservations",
-    "veterinary_clinic_system_boarding_runs"
+    "veterinary_clinic_system_boarding_runs",
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: checked_in reservations; expected = min dp(check_out). Assert reservation checked_out; run status=='cleaning' and current_patient_id null/empty. All other rows unchanged vs snapshot.",
+    "summary": "From live data: every checked_in reservation with check_out <= episode is checked_out, its run is cleaning with current_patient_id null/empty, a billing_invoice is created with the correct nights and total derived from the location's fee schedule, and an outbound email is pushed per processed guest. One ops_reports checkout manifest has the exact counts, totals, and breakdowns, all verified via dual raw-row and SQL paths. All collections outside the blast radius are byte-identical to the seed snapshot.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,31 +36,63 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: checked_in reservations; expected = min dp(check_out). Assert reservation checked_out; run status=='cleaning' and current_patient_id null/empty. All other rows unchanged vs snapshot."
+        "collection": "veterinary_clinic_system_boarding_reservations",
+        "expect": "Each processed checked_in reservation becomes checked_out; all other reservations unchanged"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_boarding_runs",
+        "expect": "Each processed guest's run is cleaning with current_patient_id cleared; all other runs unchanged"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "Exactly one invoice per processed guest with the correct invoice_number, nights, unit_price, total_amount, and linked fields"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_communications",
+        "expect": "One outbound email per processed guest with correct body, invoice number, and amount"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one checkout manifest with correct counts and breakdowns"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_boarding_reservations",
+        "expect": "Every aggregate (checkout_count, total_nights, total_revenue, by_location, by_run_type) agrees between raw-row Python and SQL GROUP BY/COUNT"
       }
     ]
   },
+  "hazards": [
+    "Date ordering and scope: the checked_in set has five guests with check_out dates 2026-09-06, 2026-09-06, 2026-09-06, 2026-09-07, and 2026-09-09. A solution that picks the wrong order (not ascending check_out then id) or ignores the check_out <= episode rule will create the wrong invoices.",
+    "Run state machine: runs must be set to 'cleaning' (not straight to 'available') and current_patient_id must be cleared. A shortcut that marks them 'available' fails.",
+    "Fee schedule lookup: the BOARD-NIGHT price is 38 at every location in the seed, but the invoice total must be computed from the location's fee schedule. A hardcoded 38 or a missed fee-schedule join produces the same numbers on the seed but fails on reseed.",
+    "Invoice and communication deduplication: invoice_number is keyed by batch_code and reservation_id, and the email subject is keyed by batch_code. On a second run these must be found and skipped; the manifest row is overwritten."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary boarding checkout invoice cleaning cycle kennel management",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Boarding Software — Animal Friends OS",
+          "PawOps — Dog Boarding & Kennel Management Software",
+          "Boarding Kennel Software with Online Bookings | KennelBooker"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "boarding checkout run status cleaning turnover veterinary kennel management task",
+        "query": "kennel checkout invoice creation run cleaning cycle multiple guests workflow",
         "top_results": [
-          "Pet Boarding Management Software | PetConnect",
-          "Veterinary Boarding Kennel Cleaning Rotation Scheduler | RationalGo App Builder"
+          "How It Works | Pet Ops",
+          "PawOps — Dog Boarding & Kennel Management Software",
+          "Boarding Kennel Software with Online Bookings | KennelBooker"
         ]
       }
     ],
-    "differentiation_note": "Turnover state machine (occupied\u2192cleaning, not straight to available) matches real kennel practice; nulling the occupant is the step agents skip."
+    "differentiation_note": "Fuses a single-reservation checkout into a multi-guest departure cycle: it invoices each stay from the fee schedule, clears and cleans each run, notifies each owner, and produces a dual-path verified checkout manifest. The fee-schedule join and run-state-machine step add real-world scope."
   }
 }

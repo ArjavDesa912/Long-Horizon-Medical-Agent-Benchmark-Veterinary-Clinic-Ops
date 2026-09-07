@@ -1,19 +1,21 @@
 {
   "task_id": "014_boarding_occupancy_snapshot",
   "name": "veterinary_clinic_system_014_boarding_occupancy_snapshot",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "workflow", "reconciliation"],
   "surface": "backend",
-  "instruction": "Record the occupancy snapshot the morning huddle uses. Create veterinary_clinic_system_ops_reports with one row per location: {report: 'boarding_occupancy', batch_code: <episode batch code>, location_id, total_runs, occupied_runs, occupancy_pct: <round(100*occupied/total, 1)>}. Exactly 3 rows.",
+  "instruction": "Generate a live boarding occupancy snapshot and write it as a single ops_reports row with report='boarding_occupancy_snapshot' keyed by the live batch_code. The snapshot must be derived from boarding_runs (not reservations). For every location include total_runs, occupied, available, cleaning, occupancy_rate (occupied/total), board_night_rate (from the location's fee schedule), and potential nightly revenue (occupied * board_night_rate). For every run_type include total, occupied, and available counts. For every species currently occupying a run include occupied count. Also include total_runs, total_occupied, total_available, total_cleaning, and checked_in_reservations (count of boarding_reservations with status checked_in). Overwrite the report if it already exists. No other collection may be modified.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 7,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute per-location totals/occupied from live boarding_runs; assert 3 rows, exact ints, pct within 0.05, batch_code==nonce.",
+    "summary": "Episode date from ops_meta. One ops_reports row named boarding_occupancy_snapshot with batch_code, containing totals and per-location/per-run-type/per-species breakdowns. All aggregates verified by independent Python and SQL paths. All collections outside ops_reports are byte-identical to the seed snapshot. The report is idempotent.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,31 +32,44 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute per-location totals/occupied from live boarding_runs; assert 3 rows, exact ints, pct within 0.05, batch_code==nonce."
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one boarding_occupancy_snapshot row with correct dual-path verified totals"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_boarding_runs",
+        "expect": "Every aggregate in the report agrees between raw-row Python counts and independent SQL GROUP BY counts"
       }
     ]
   },
+  "hazards": [
+    "Location 2 and location 3 have zero occupied runs. The report must list them with count 0, not omit them, and must not derive occupancy from reservations.",
+    "Run-type vs species: the five occupied runs are all run_type='kennel', but the guests include one feline (patient 8) and one equine (patient 10). by_species must reflect patient species, while by_run_type must reflect run.run_type.",
+    "Status counts must come from boarding_runs.status; reservations may have a different number of checked_in rows or decoy reserved rows.",
+    "The fee schedule BOARD-NIGHT price is required for potential nightly revenue; each location has its own schedule.",
+    "The report must be overwritten by batch_code on re-run, not duplicated."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "kennel boarding occupancy report live snapshot veterinary",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Real-Time Occupancy Views for Kennels and Suites (PocketSuite)",
+          "Occupancy Board (PupLine)",
+          "Pet Boarding Software for Kennels & Pet Hotels | GoPet AI"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "boarding occupancy snapshot percentage by location veterinary kennel report",
+        "query": "veterinary kennel occupancy report run type status location fee schedule",
         "top_results": [
-          "Occupancy Report – Pet Manager Software - Official Documentation",
-          "Lodging Occupancy Report (Reference) – Gingr"
+          "IntraVet Manual — Boarding List / Run Summary / Occupancy Percentage",
+          "Occupancy Reports | Kennel Connection Help Center",
+          "IDEXX Cornerstone Boarding and Grooming User Guide"
         ]
       }
     ],
-    "differentiation_note": "Simple aggregation but exact-count + live-nonce fields defeat hardcoding; baseline of the report family."
+    "differentiation_note": "Upgrades simple occupancy counting into a read-only, multi-source operational snapshot that reconciles run status, fee schedule pricing, patient species, and checked-in reservations with independent SQL/Python aggregation."
   }
 }

@@ -1,52 +1,66 @@
 {
   "task_id": "052_soap_note_lock_enforcement",
   "name": "veterinary_clinic_system_052_soap_note_lock_enforcement",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "update",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["update", "workflow", "reconciliation", "idempotency"],
   "surface": "websearch",
-  "instruction": "Enforce the clinic's record-retention rule consistently: clinical notes older than 30 days must be locked (standard medical-records practice \u2014 verify if needed). For every visit_records row whose visit_date is more than 30 days before the episode date and whose locked_at is null, set locked_at to the episode timestamp and add lock_reason='retention_policy'. Notes 30 days old or newer, and already-locked notes, stay byte-identical.",
+  "instruction": "Enforce the clinic's clinical-record lockdown under this episode's batch code (read batch_code and episode_date from the ops_meta row with meta_key='episode_state'). Completed clinical notes are locked once they are more than 30 days old — a standard medical-record retention/lockdown convention you may verify if needed. (1) For every visit_records row whose visit_date is strictly more than 30 days before the episode date AND whose locked_at is null, set locked_at to the episode timestamp (<episode_date>T00:00:00.000Z) and set lock_reason='retention_policy'. A note exactly 30 days old is not yet lockable, and already-locked notes are never re-stamped or re-reasoned — they stay byte-identical. (2) For each note you lock, append one audit_log row: {actor:'system', actor_role:'system', action:'RECORD_LOCKED', target_collection:'visit_records', target_id:<the visit_records id as a string>, details:'locked under 30-day retention policy batch <batch_code>', occurred_at:<episode timestamp>}. (3) Rewrite this batch's lock audit summary in ops_reports: delete any prior rows with report='lock_audit' and batch_code=<batch_code>, then push exactly one row {report:'lock_audit', batch_code, records_scanned, locked_this_run, already_locked, unlocked_recent} where records_scanned is the total visit_records count, locked_this_run is the number of rows now carrying lock_reason='retention_policy' with locked_at on the episode date, already_locked is the number of visit_records rows that were locked before this batch ran, and unlocked_recent is the number of visit_records rows still unlocked whose visit_date is NOT more than 30 days before the episode date. Change nothing else — no other visit_records field, no other audit_log rows, no other collection.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "par_steps": null,
+  "max_steps": null,
+  "_par_steps_note": "Intentionally unset — measure real gold API-call count via a live gold run in the QC session (codegen-only pass).",
+  "_max_steps_note": "Intentionally unset — set to roughly par_steps * 1.5 in the QC session per the anti-brute-force rule.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_visit_records"
+    "veterinary_clinic_system_visit_records",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: (ep - visit_date).days>30 and locked_at null -> assert locked_at dp==ep and lock_reason exact; assert all other rows byte-identical; count 36.",
+    "summary": "Verifier replays the rule from the seed snapshot: the target set is seed rows with dp(visit_date) strictly more than 30 days before the episode date and locked_at null. Each target row must end with dp(locked_at)=episode date and lock_reason='retention_policy' and every other field byte-identical; every non-target row byte-identical. Exactly len(targets) new audit_log rows with the exact RECORD_LOCKED shape (1:1 with target ids) appear beside the 4 untouched seeded audit rows. One ops_reports 'lock_audit' row for this batch with records_scanned/locked_this_run/already_locked/unlocked_recent recomputed two independent ways (raw-row Python vs SQL COUNT) and agreeing three-way with the written row. All collections outside the blast radius canary-hashed unchanged.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: (ep - visit_date).days>30 and locked_at null -> assert locked_at dp==ep and lock_reason exact; assert all other rows byte-identical; count 36."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "(see verifier.py)", "expect": "see summary above" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_visit_records", "expect": "locked/unlocked-recent counts agree between raw-row Python filtering and independent SQL COUNT queries" }
     ]
   },
+  "hazards": [
+    "Boundary knife-edge under episode jitter: visit_records id=352 has visit_date 2026-08-30 with locked_at null — at episode date 2026-09-29 it is exactly 30 days old and must stay unlocked (unlocked_recent=1), while at 2026-09-30 or later it must lock. The episode_date jitters ±3 days per episode, so an off-by-one '>=' vs '>' comparison silently picks the wrong set on a fraction of episodes rather than failing loudly.",
+    "Already-locked decoys: 344 of 371 seeded visit rows are already locked (e.g., id=1 visit_date 2026-01-05 with locked_at 2026-01-06T21:08:36.204+00:00) — re-stamping locked_at, adding lock_reason, or appending audit rows for them fails the byte-identity and audit-count checks.",
+    "Content-driven scan trap: lockable rows can have empty problems arrays and generic text (e.g., id=27 visit_date 2026-08-14, id=352 visit_date 2026-08-30 both have problems=[]) — an agent that iterates problems or searches note text to find 'clinical notes' misses them; the target set is defined by visit_date + locked_at alone. At ep=2026-09-30 the target set is 27 rows.",
+    "Audit decoys: seeded audit_log rows (ids 1-4 — TRANSFER_COMPLETED, OWNER_MERGE, CS_LOG_APPENDED, ESTIMATE_CONVERTED) must remain byte-identical beside the new RECORD_LOCKED rows; a solution that rewrites the audit collection or writes records for non-target rows fails.",
+    "Idempotency: locked_this_run must be re-derived as live rows with lock_reason='retention_policy' AND dp(locked_at)=episode date — a run-local delta counter reads 0 on re-run and corrupts the summary row; the lock_audit row is deleted-then-rewritten per batch_code."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "medical record lock SOAP note retention 30 days veterinary clinic amendment locked record",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "ezyVet Knowledge Center — locked clinical records cannot be changed and lock related records",
+          "AAVSB Model Regulations: Medical Recordkeeping (2026) — amendments must preserve original content",
+          "201 KAR 16:701 Standards for medical records — alteration must be clearly identified"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Threshold boundary (>30, not >=) on a partially-locked collection; agents re-stamp already-locked rows and fail byte-identity."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary record lockdown enforcement task audit trail per-record locking summary report benchmark",
+        "top_results": [
+          "No public RL benchmark task found combining retention-window locking with per-record audit rows and a derived summary",
+          "Existing record-integrity tasks are single-field updates without the boundary+jitter interplay",
+          "PIMS lockdown features (ezyVet clinical record lockdown) are documented as product behavior, not evaluatable tasks"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgrades v1's bare lock update into a three-surface enforcement: the strict >30-day boundary interacts with per-episode date jitter (row id=352 flips in/out of the target set), every lock must produce a 1:1 RECORD_LOCKED audit row, and the lock_audit summary row must be re-derivable idempotently — already-locked rows are byte-identical decoys that punish re-stamping."
   }
 }

@@ -1,60 +1,67 @@
 {
   "task_id": "004_fvrcp_kitten_series_check",
   "name": "veterinary_clinic_system_004_fvrcp_kitten_series_check",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
-  "surface": "websearch",
-  "instruction": "Feline patients whose FVRCP booster will come due within the next 30 days (from the episode date in ops_meta) need a head's-up before the window opens. For every feline patient with an FVRCP vaccination whose due_date falls in (episode_date, episode_date+30 days] and who has NO queued reminder yet, push one reminder_queue row with kind='vaccination_due', status='queued', queued_by='frontdesk@pawsclinic.com', due_date equal to the vaccination's due_date, and message '<PatientName> FVRCP booster due <YYYY-MM-DD> \u2014 book a nurse visit.' Finally, add a summary row with kind='compliance_summary', status='queued', and message='FVRCP due-in-30 count: <N>' where N is the number of reminder rows you created. Cats already covered by a queued vaccination_due reminder must be skipped but still counted in N as zero \u2014 i.e. N counts only rows actually created.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "analytics", "reconciliation"],
+  "surface": "backend",
+  "instruction": "Run the feline FVRCP series review for the episode. For every feline patient (species='feline') whose FVRCP status is missing, overdue (due_date < episode date), or due soon (episode date < due_date <= episode date + 30 days), and who does NOT already have any queued vaccination_due reminder of any vaccine type, queue one reminder_queue row with kind='vaccination_due', status='queued', queued_by='frontdesk@pawsclinic.com', vaccine_type='FVRCP', batch_code=<nonce batch_code>, category in {'series start','overdue','due soon'}, message '<PatientName> FVRCP <category> due <YYYY-MM-DD> — book a nurse visit.', and due_date set as follows: missing series => episode date; overdue => the earliest overdue FVRCP due_date; due soon => the earliest due-soon FVRCP due_date. If a feline patient has multiple FVRCP rows, use the earliest due_date in the relevant category. Then push one outbound email communications row per newly queued patient: subject='FVRCP series review <batch_code>', body='<PatientName> FVRCP <category> due <due_date>.', logged_by='system', occurred_at=episode. Then write ops_reports rows with report='fvrcp_series_review', vaccine_type='FVRCP', batch_code, category, and reminder_count (one per category plus an 'ALL' rollup). Finally append one audit_log row with action='FVRCP_SERIES_REVIEW', actor='system', actor_role='system', target_collection='reminder_queue', target_id=<batch_code>, details summarizing counts, and occurred_at=episode. Leave all non-feline patients and all non-FVRCP vaccination rows untouched; preserve seeded reminder_queue, communications, and audit_log rows.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session (anti-brute-force); this session cannot run against a container",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session; placeholder only",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_reminder_queue"
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Compute expected set: feline patients (join patients.species) with FVRCP due in (ep, ep+30d]; exclude those with existing queued vaccination_due rows (snapshot). Assert exactly one new row per expected patient with all fields correct (message date uses dp(due_date)). Assert exactly one new compliance_summary row with message count == number of created rows. Assert seeded 4 rows unchanged; total == 4 + N + 1.",
+    "summary": "Expected set = feline patients with no queued vaccination_due reminder and either (a) no FVRCP record, (b) earliest FVRCP due_date < episode, or (c) earliest FVRCP due_date in (episode, episode+30 days]. For each expected patient, exactly one reminder_queue row and one communications row with correct category and due_date. ops_reports has one row per category plus an ALL rollup, counts matching independent Python and SQL derivations. Exactly one new audit_log row. Seeded rows unchanged; all non-feline and non-FVRCP rows untouched.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Compute expected set: feline patients (join patients.species) with FVRCP due in (ep, ep+30d]; exclude those with existing queued vaccination_due rows (snapshot). Assert exactly one new row per expecte"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside the declared blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_reminder_queue", "expect": "seeded 4 rows unchanged; one new row per eligible feline with category-specific due_date and message" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_patients+vaccinations", "expect": "per-category and total feline FVRCP counts computed by Python and SQL GROUP BY/COUNT and matched to ops_reports" }
     ]
   },
+  "hazards": [
+    "FVRCP rows for non-feline species (canine, avian, exotic, equine) must be ignored; the verifier will confirm no reminder is created for those patients.",
+    "45 feline patients have no FVRCP record at all and must be flagged as 'series start' with due_date = episode date.",
+    "The seeded queued vaccination_due reminder for patient 5 (Clementine, feline) excludes her from the new batch even though she lacks an FVRCP record.",
+    "A due_date exactly equal to the episode date is neither overdue nor due soon and must not trigger a reminder; same for any due_date > episode + 30.",
+    "Several feline patients have multiple FVRCP rows; only the earliest due_date in the relevant category is used, and only one communication is sent per patient."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAFP feline vaccination guidelines FVRCP rabies booster interval adult cat 1 year 3 year",
+        "query": "veterinary FVRCP kitten series feline vaccine due date reminder workflow",
         "top_results": [
-          "2020 AAHA/AAFP Feline Vaccination Guidelines (JAAHA PDF)",
-          "2020 AAHA/AAFP Feline Vaccination Guidelines (journals.sagepub.com)",
-          "AAHA Feline Vaccination Guidelines FAQ"
+          "FVRCP Vaccine for Cats: Schedule and Side Effects - PetMD",
+          "FVRCP Vaccine for Cats (Discount pricing available) | VetInfo",
+          "Feline Vaccination Guidelines - AAFP / AAHA"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "FVRCP kitten booster due in 30 days reminder veterinary task",
+        "query": "veterinary FVRCP feline series review missing overdue due soon audit ops_reports benchmark",
         "top_results": [
-          "Kitten Vaccine Schedule & Reminder App | PetsClub",
-          "Kitten Vaccine Schedule Calculator — FVRCP & Rabies | FurCalc"
+          "VetCarePress Vaccinations documentation",
+          "Vetstoria Vaccination Reminder System documentation",
+          "RationalGo Pet Vaccination Schedule and Reminder System"
         ]
       }
     ],
-    "differentiation_note": "Half-open date window + exclusion set + a self-referential summary count row; agents routinely miscount or include excluded patients."
+    "differentiation_note": "Fuses a tri-state feline vaccine-status classification (missing / overdue / due soon) with owner communication and an audit trail, requiring patient-species and vaccine-type joins plus a half-open date window. No public benchmark combines missing-series detection, category rollups, and idempotent report writeback across these four collections."
   }
 }

@@ -1,46 +1,64 @@
 {
   "task_id": "095_seed_integrity_forensics",
   "name": "veterinary_clinic_system_095_seed_integrity_forensics",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "repair",
+  "category": ["aggregation", "reconciliation"],
   "surface": "backend",
-  "instruction": "READ-ONLY forensic audit \u2014 change NOTHING in any collection. Cross-check the whole dataset for referential integrity: (a) patients.owner_id must exist in owners; (b) appointments.patient_id and provider_id must exist; (c) boarding_reservations.run_id and patient_id must exist; (d) visit_records and lab_results patient_id must exist; (e) billing_invoices.owner_id and patient_id must exist; (f) vaccinations.patient_id must exist. Create one ops_reports row {report: 'integrity_audit', batch_code, violations: <total count of dangling references across all six checks>, detail: <JSON object '<collection>.<field>' -> count for every checked pair, including zeros>, clean: <true iff violations == 0>}.",
+  "instruction": "The procedural seed generator for this episode left several integrity, species, and scheduling anomalies. Run a read-only forensic audit across the whole dataset and produce one ops_reports row {report: 'seed_integrity_forensics', batch_code, violations: <total>, by_rule: {<rule_name>: <count>, ...}, row_refs: {<rule_name>: [<ascending ids>], ...}, clean: <true iff total == 0>}. The audit must check the following rules (derive each from the data and veterinary standards; include zero-count rules; do not modify any collection): (a) provider/appointment alignment: every appointment's location_id must equal its provider's location_id; (b) species-appropriate vaccines: FVRCP is feline-only, DHPP and bordetella are canine-only, rabies is species-neutral; (c) no two owners share the same phone number; (d) all foreign-key columns across patients, appointments, boarding_reservations, visit_records, lab_results, billing_invoices, vaccinations, medications, communications, controlled_substance_log, location_transfers, files, waitlist, pharmacy_inventory, providers, and fee_schedules must point to existing rows (patient_id in controlled_substance_log may be null); (e) no owner balance may be negative. Report row ids only for rules with violations; empty lists for clean rules.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 60,
-  "par_steps": 15,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
-  "blast_radius": [],
+  "blast_radius": [
+    "veterinary_clinic_system_ops_reports"
+  ],
   "success_criteria": {
-    "summary": "Canary ALL seeded collections (nothing may change). Recompute the six dangling-reference counts from live data; assert exact total, exact detail dict (zeros included), clean flag; nonce.",
+    "summary": "Canary every collection except ops_reports. Recompute the five rule counts and row-id lists two independent ways (raw Python over fetch_all and SQL COUNT/SELECT). Assert the ops_reports row matches exactly, including empty lists for clean rules and clean flag.",
     "checks": [
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Canary ALL seeded collections (nothing may change). Recompute the six dangling-reference counts from live data; assert exact total, exact detail dict (zeros included), clean flag; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "dual_path", "collection": "(see verifier.py)", "expect": "each rule count and row id set is computed via both Python filter and SQL query" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "exactly one seed_integrity_forensics row with batch_code, matching by_rule/row_refs/violations/clean" }
     ]
   },
+  "hazards": [
+    "provider/appointment location mismatch: 364 appointments where appointment.location_id does not match the assigned provider.location_id (e.g., appointment id 1 has provider_id 3, whose location_id is 2, but the appointment location_id is 1).",
+    "vaccine/species mismatch: 161 vaccination rows where the vaccine_type is inappropriate for the patient's species (e.g., row id 4 is a canine patient (patient_id 2) with FVRCP; row id 6 is a feline patient with bordetella).",
+    "duplicate owner phone: the number (828) 555-0101 is shared by owner id 1 (Margaret Whitfield) and owner id 22 (Faye Lovelace). The audit must flag both ids, not assume a single owner.",
+    "negative owner balance: exactly one owner, id 21 (eugene.kim@example.com), has balance -45.0. Every other owner has balance >= 0 and must be byte-identical after the audit.",
+    "controlled_substance_log patient_id is nullable: rows with action 'receive' or 'waste' legitimately have null patient_id (ids 3,5,8,10). A naive FK check that counts null patient_id as a violation produces a false positive and fails."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary medical record data integrity standards species vaccine FVRCP feline DHPP bordetella canine",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Vaccination Record Fields: What to Track and Manage (creatures.com)",
+          "Recordkeeping - 49 Pa. Code § 31.22 (law.cornell.edu)",
+          "Frontiers | Development and evaluation of a survey instrument to assess veterinary medical record suitability (frontiersin.org)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Whole-graph referential audit with a must-be-zero-expectation report; the canary-everything design makes tampering to force 'clean' detectable."
+    "uniqueness_searches": [
+      {
+        "query": "referential integrity forensics veterinary clinic database benchmark RL environment",
+        "top_results": [
+          "Perfect Pet - generate and pollute relational veterinary clinic databases (github.com/mathildemarcy/perfect_pet)",
+          "vet-salud-database - data integrity and validation tests (github.com/RaulAJaimes)",
+          "World Feedback for Clinical Agents: Diagnosing RL in FHIR Environments (arxiv.org)"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses whole-dataset referential, species, scheduling, and financial integrity into a single read-only forensic report. The agent must derive species-specific vaccine rules, provider primary-location alignment, and duplicate-phone detection from live data, and the verifier enforces dual-path recomputation for every rule and canary preservation of every non-report collection."
   }
 }

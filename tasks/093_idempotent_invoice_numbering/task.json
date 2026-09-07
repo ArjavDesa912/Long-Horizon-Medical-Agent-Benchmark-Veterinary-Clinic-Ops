@@ -1,19 +1,21 @@
 {
   "task_id": "093_idempotent_invoice_numbering",
   "name": "veterinary_clinic_system_093_idempotent_invoice_numbering",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "idempotency",
+  "category": ["idempotency", "workflow", "aggregation"],
   "surface": "backend",
-  "instruction": "Every invoice must have a canonical public_ref derived deterministically: 'PUB-<invoice_number>'. Set public_ref on every invoice that lacks it or has a wrong value. Rows already correct must remain byte-identical (do NOT rewrite updated_at by no-op updates). Then create exactly one ops_reports row {report: 'public_ref_backfill', batch_code, backfilled: <count of rows you changed>, total: <invoice count>} \u2014 but if a report row with this episode's batch_code already exists for report 'public_ref_backfill', update it instead of inserting a second one.",
+  "instruction": "Every invoice must have a canonical public reference derived deterministically as 'PUB-<invoice_number>'. Backfill all invoices that are missing or have the wrong public_ref. Do not update invoices whose public_ref is already correct, and do not change any other invoice field. Then create or update exactly one ops_reports row {report: 'public_ref_backfill', batch_code, backfilled: <count of rows you changed>, total: <total invoice count>}. Running the task a second time must change zero invoices and update the report to backfilled: 0.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 12,
+  "max_steps": null,
+  "_max_steps_note": "set after live gold measurement in QC session",
+  "par_steps": null,
+  "_par_steps_note": "set after live gold measurement in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -23,7 +25,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Assert every invoice has public_ref=='PUB-'+invoice_number and rows needing no change are byte-identical to snapshot; assert EXACTLY ONE ops_reports row for report 'public_ref_backfill' + this nonce with correct counts. (QC runs gold twice: backfilled must be 0 on the second run and still one report row \u2014 the report count differs per pass, so the verifier accepts backfilled in {0, K_expected} with total exact.)",
+    "summary": "Every invoice has public_ref == 'PUB-' + invoice_number; invoices already correct remain byte-identical (ignoring updated_at); exactly one ops_reports public_ref_backfill row for this batch with backfilled in {0, expected_count} and total == invoice count; invoice count verified by API and SQL dual path.",
     "checks": [
       {
         "type": "canary_hash",
@@ -32,22 +34,43 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Assert every invoice has public_ref=='PUB-'+invoice_number and rows needing no change are byte-identical to snapshot; assert EXACTLY ONE ops_reports row for report 'public_ref_backfill' + this nonce w"
+        "expect": "All invoice public_ref values match PUB-<invoice_number>; only changed rows have updated_at drift; one report row upserted by batch_code"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "total invoice count and expected backfill count agree between API fetch_all and SQL COUNT"
       }
     ]
   },
+  "hazards": [
+    "All 260 billing_invoices (id 1-260, invoice_number INV-1001..INV-1260) have public_ref null in the snapshot, so the expected backfill count is 260. A solution that hardcodes a smaller count or stops at the first screen of rows will leave invoices unbackfilled.",
+    "A solution that updates every invoice unconditionally (even when public_ref is already correct) will drift updated_at on all 260 rows; the verifier requires byte-identity for rows that did not need to change.",
+    "A solution that derives public_ref from a field other than invoice_number (e.g., id or line_items) will produce the wrong value for every row.",
+    "The ops_reports public_ref_backfill row must be upserted by batch_code; a solution that pushes a new report row on every run will create duplicates.",
+    "Invoice ids and invoice numbers are both sequential but offset (id 1 == INV-1001); a solution that assumes id == invoice_number will write PUB-1, PUB-2, etc. and fail."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary invoice public reference number backfill idempotent billing",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Provet REST API: Billing & Invoicing (developers.provetcloud.com)",
+          "ezyVet API: receive invoice references (developers.ezyvet.com)",
+          "ezyVet Invoices API (apis.io)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Idempotent upsert of BOTH data and its own report row; no-op update detection via byte-identity (updated_at drift fails)."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary billing invoice public_ref backfill idempotent report benchmark task",
+        "top_results": [
+          "Veterinary Practice Reporting Every Week (digitail.com)",
+          "Veterinary Clinic Compliance Audit Checklist (paperform.co)",
+          "Veterinary Automation Playbook 2026 (ustechautomations.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "A scaled 260-row idempotent backfill with deterministic public_ref derivation, no-op protection for already-correct rows, and an upserted report. The verifier validates the backfill with an API-vs-SQL dual-path count and enforces byte-identity on unchanged rows."
   }
 }

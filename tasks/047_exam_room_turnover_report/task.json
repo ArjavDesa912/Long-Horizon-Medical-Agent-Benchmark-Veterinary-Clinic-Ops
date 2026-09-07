@@ -1,19 +1,20 @@
 {
   "task_id": "047_exam_room_turnover_report",
   "name": "veterinary_clinic_system_047_exam_room_turnover_report",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation"],
   "surface": "backend",
-  "instruction": "Which exam rooms carried the load? One ops_reports row {report: 'room_usage', batch_code, per_room: <JSON object mapping room name -> total appointment count across ALL appointments at all locations>, busiest_room: <room with the most appointments; tie -> alphabetically first>}. Exactly one row.",
+  "instruction": "Produce an exam-room turnover report, batched under the episode batch code, by joining appointments, locations, and providers. For every (location_id, room) pair that has at least one appointment in the trailing 30 days or the next 14 days, create one ops_reports row with report='room_turnover', batch_code, location_id, room, location_name (from locations), completed_last_30 = count of appointments with status 'completed' and dp(appointment_date) in [ep-30, ep), booked_next_14 = count of appointments with status in ('scheduled','confirmed') and dp(appointment_date) in [ep, ep+14), turnover_score = completed_last_30 + booked_next_14, distinct_patients = distinct patient_id count across both windows, distinct_providers = distinct provider_id count across both windows, primary_provider_id = the provider_id with the most appointments in that (location, room) across both windows (tie -> lowest numeric provider id). Then create one ops_reports row with report='room_turnover_summary', batch_code, total_turnover = sum of turnover_score, busiest_pair = '<location_id>/<room>' with the highest turnover_score (tie -> lexicographically smallest), all_pairs = sorted list of '<location_id>/<room>' strings, and avg_turnover = round(total_turnover / len(all_pairs), 1) if any pairs, else 0.0. The past window is half-open [ep-30, ep); the future window is half-open [ep, ep+14). Only appointments with status 'completed' count in the past bucket; only 'scheduled' or 'confirmed' count in the future bucket. Delete any existing room_turnover / room_turnover_summary rows for this batch before writing.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps must be measured against a live container in the QC session; do not set final values without a real gold run.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,31 +23,42 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute counts from live appointments; assert per_room object exact (dict compare), busiest_room correct with alpha tiebreak; nonce.",
+    "summary": "Exactly one room_turnover row per (location, room) pair with all derived fields matching live data, plus one room_turnover_summary row. Counts, distincts, primary provider, busiest pair, and average are computed independently by raw-row Python and SQL and must agree. All other collections canary-checked.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute counts from live appointments; assert per_room object exact (dict compare), busiest_room correct with alpha tiebreak; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "exact per-pair metrics and summary, keyed by batch_code and report" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_appointments", "expect": "every aggregate in each room_turnover row is computed both by raw-row Python and independent SQL; the two agree and match what was written" }
     ]
   },
+  "hazards": [
+    "Room name collision across locations: 'Exam 1' exists at all three locations. Snapshot rows id 4 (Exam 1, location 1, checked_in), id 5 (Exam 1, location 2, checked_in), and id 6 (Exam 1, location 3, checked_in) all share the same room name but different location_id. A solution that groups by room only will merge them and produce wrong counts.",
+    "The trailing-30-day window is not 'all past appointments'. It is status='completed' only and half-open [ep-30, ep). Rows like id 4 (checked_in, 2026-09-04, Exam 1, loc 1) and id 99 (no_show, 2026-09-03, Exam 3, loc 3) fall inside the trailing window for episode 2026-09-30 but must not count in completed_last_30. A wrong status filter or inclusive future boundary will distort them.",
+    "Stale future-dated appointments that are already past: id 74 (scheduled, Ear infection re-check, 2026-09-27, Exam 3, loc 2) and id 60 (scheduled, Chronic kidney disease monitoring, 2026-09-27, Exam 1, loc 3) are before episode 2026-09-30 with status 'scheduled'. They must not count in either bucket, but an over-broad 'all scheduled' or 'all future' filter would include them.",
+    "Appointments on the episode date itself belong to the future bucket, not the past bucket. For episode 2026-09-30, id 545 (scheduled, Annual check, 2026-09-30, Exam 1, loc 1) is in [ep, ep+14) and counts in booked_next_14; using <= in the past boundary would mis-classify it.",
+    "Primary provider tie-break is numeric: if two providers have the same appointment count for a (location, room), choose the lower provider_id. The field is stored as a string but the comparison is numeric.",
+    "Idempotency: the agent must delete existing room_turnover and room_turnover_summary rows for this batch (by report + batch_code) before writing; otherwise a rerun would produce duplicate report rows."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary exam room turnover utilization reporting appointments per room practice management",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "5 Steps to Automate Daily Appointment Reports in Vet Clinics 2026 (ustechautomations.com)",
+          "Veterinary Practice KPIs Explained (veterinarybusinessguide.com)",
+          "Veterinary Practice Benchmarking Guide (veterinarybusinessguide.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Nested-JSON report field with deterministic tiebreak; tests structured-output fidelity."
+    "uniqueness_searches": [
+      {
+        "query": "exam room turnover report veterinary practice aggregation SQL dual path benchmark task",
+        "top_results": [
+          "Veterinary Practice Benchmarking Guide (veterinarybusinessguide.com)",
+          "Veterinary Practice KPIs Explained (veterinarybusinessguide.com)",
+          "Dashboard & Analytics | romcode15/gestionveterinaria (deepwiki.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines multi-dimensional room turnover (past completed + future booked, distinct patients/providers, primary provider with numeric tie-break) with a cross-location room identity hazard and dual-path SQL vs Python verification. No public benchmark packages this many aggregation concerns into a single report while requiring reconciliation of room name collisions across locations."
   }
 }

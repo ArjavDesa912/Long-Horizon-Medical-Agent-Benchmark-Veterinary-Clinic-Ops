@@ -1,19 +1,21 @@
 {
   "task_id": "075_sql_vs_api_crosscheck",
   "name": "veterinary_clinic_system_075_sql_vs_api_crosscheck",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation", "report"],
   "surface": "backend",
-  "instruction": "Trust but verify the SQL endpoint. Compute two ways and report agreement: (a) via GET /v1/query on appointments, count rows per status; (b) via POST /v1/sql/query with SELECT status, COUNT(*) ... GROUP BY status on the same table (veterinary_clinic_system_appointments). Create one ops_reports row {report: 'sql_crosscheck', batch_code, api_counts: <JSON object status->count>, sql_counts: <JSON object status->count>, agree: <true iff identical>}.",
+  "instruction": "The board does not trust the SQL endpoint to match the REST API. Produce a trust-but-verify row-count parity report for every seeded business collection. For each of the 24 business collections present at image build time (exclude the runtime nonce table and the report table you will write), independently compute the row count two ways: (1) by paginating through GET /v1/query/{collection}, and (2) by an independent SELECT COUNT(*) via POST /v1/sql/query using the full table name as it appears in the database. Write one ops_reports row per collection with report='sql_crosscheck', the episode batch_code, the short collection name, api_count, sql_count, and agree (true iff the two counts match). Also write one summary row with report='sql_crosscheck_summary', batch_code, total_api (sum of api_count), total_sql (sum of sql_count), disagree_count, and all_agree. Do not skip any collection; the verifier recomputes both paths and asserts agreement for every row.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Independently compute counts from live API data; assert api_counts==expected, sql_counts==expected, agree true; nonce.",
+    "summary": "24 per-collection sql_crosscheck rows plus one summary row, all keyed by batch_code. For every business collection, api_count and sql_count must match each other, the live re-derived counts, and the values in the agent's row. Summary totals and all_agree must be correct. All collections outside ops_reports are canary-checked byte-identical.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +32,43 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Independently compute counts from live API data; assert api_counts==expected, sql_counts==expected, agree true; nonce."
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "24 sql_crosscheck rows and 1 sql_crosscheck_summary row per batch_code; counts independently recomputed via API and SQL"
+      },
+      {
+        "type": "dual_path",
+        "collection": "all 24 business collections",
+        "expect": "row count computed both by fetch_all() and by SELECT COUNT(*) and the two values must agree with each other and with the written row"
       }
     ]
   },
+  "hazards": [
+    "Runtime-only tables: /v1/tables also lists the per-episode nonce table (veterinary_clinic_system_ops_meta) and, after first write, the report table (veterinary_clinic_system_ops_reports). Neither is in the host-side seed_snapshot.json (the snapshot has 24 seeded collections only). An agent that blindly queries /v1/tables and includes those two tables will write 26 or 27 rows instead of 24 and will fail the fixed-scope check.",
+    "Prefix discipline: SQL table names are the full veterinary_clinic_system_* names, not the short names used by the REST query endpoint. An agent that strips the prefix in the SQL query (e.g., 'FROM appointments') will receive a TABLE_NOT_FOUND or zero-count error and produce a mismatch that breaks the summary.",
+    "Small-collection trap: audit_log has only 4 rows, controlled_substance_log 12 rows, and reminder_queue 4 rows. An agent that tries to infer total counts from a single ?limit=1 page or from response envelope metadata instead of paginating to completion will misreport these collections.",
+    "Snapshot counts are the source of truth: the seed snapshot records appointments=548, vaccinations=600, patients=300, owners=220, billing_invoices=260. The live row counts must match these exactly; a hardcoded or memorized count from a prior episode will be wrong if the verifier's own dual-path computation does not match."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice SQL vs REST row count audit data quality BaaS",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "OpenVPM - Full REST API with OpenAPI/Swagger, PostgreSQL, audit logging (github.com/kingandoakintelligence-tech/openvpm)",
+          "DataHub Vet - unified API for veterinary PIMS real-time sync (datahubvet.com)",
+          "Vetify - API key management, versioned API, outbound webhooks (github.com/Ealanisln/vetify)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Dual-path verification (REST vs SQL) \u2014 the agent must actually run both channels, and the SQL path is service-admin gated (forces correct credential choice)."
+    "uniqueness_searches": [
+      {
+        "query": "benchmark task REST API SQL count parity 24 collections crosscheck",
+        "top_results": [
+          "metaobjects - REST API contract conformance corpus (github.com/metaobjectsdev/metaobjects)",
+          "Coral - turns REST APIs into SQL tables (codeline.co)",
+          "BaaS security scanners - single-file probe pattern (dev.to/perufitlife)"
+        ]
+      }
+    ],
+    "differentiation_note": "A whole-database parity audit: the agent must independently count every seeded collection via both the paginated REST API and the service-admin-gated SQL endpoint, not just one table. It must exclude runtime tables discovered in /v1/tables, and the verifier recomputes each count through both channels. This is harder than a single-table count because it forces the agent to handle the prefix difference between the REST collection slug and the SQL table name and to paginate large collections."
   }
 }

@@ -1,53 +1,68 @@
 {
   "task_id": "042_waitlist_promotion",
   "name": "veterinary_clinic_system_042_waitlist_promotion",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "workflow",
-  "surface": "frontend",
-  "instruction": "A cancellation opened a slot: location 1, Exam 1, the episode date at 09:00\u201309:30 with Dr. Elena Alvarez (provider id 1). Promote the HIGHEST-priority waiting waitlist entry at location 1 (priority order: urgent > work_in > routine; break ties by earliest created_at) into a real appointment: create the appointment {patient_id from the waitlist entry, provider_id '1', location_id '1', room 'Exam 1', appointment_date = episode date, start_time '09:00', end_time '09:30', reason = the waitlist entry's reason, status 'scheduled'}, and set that waitlist entry's status to 'booked'. Other waitlist entries stay 'waiting'.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "repair", "idempotency"],
+  "surface": "backend",
+  "instruction": "A front-desk cancellation opened a 30-minute slot at location 1 on the episode date. Promote the single highest-priority waiting waitlist entry at location 1 into the earliest free 30-minute slot at location 1 on the episode date (times starting at 09:00, searched in 30-minute increments; rooms searched in order Exam 1, Exam 2, Exam 3; a slot is free only if no appointment with status in ('scheduled','confirmed','checked_in') already occupies that date/location/room/start_time). Priority order is urgent > work_in > routine, with ties broken by earliest created_at, then lowest id. Create one appointment {patient_id from the winner, provider_id '1', location_id '1', the chosen room, appointment_date = episode date, start_time and end_time 30 minutes apart, reason from the waitlist, status 'scheduled'} and set the winning waitlist entry's status to 'booked'. All other waitlist entries must remain 'waiting'. Log one audit_log row {actor:'system', actor_role:'system', action:'WAITLIST_PROMOTION', target_collection:'waitlist', target_id:<winner id>, details:'Promoted waitlist <id> to <room> <start_time> (<batch_code>)', occurred_at: episode timestamp}. Push one ops_reports row report='waitlist_promotion' keyed by batch_code with {promoted_count, slot: {room, start_time, end_time}}.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 11,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps cannot be measured in a codegen-only session. They must be recorded from a live gold run in the QC container.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
     "veterinary_clinic_system_waitlist",
-    "veterinary_clinic_system_appointments"
+    "veterinary_clinic_system_appointments",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: location-1 waiting entries; expected winner = min by (priority rank, created_at). Assert new appointment exact fields; winner status 'booked'; other waitlist rows unchanged; appointments 47, waitlist 6.",
+    "summary": "Recompute the winning location-1 waiting entry and the first free 30-minute slot from the live seed data. The winner must have status 'booked' with all other fields unchanged. Exactly one new appointment must exist with the winner's patient_id, provider_id '1', location_id '1', the expected free room/start/end, episode date, winner's reason, and status 'scheduled'. All other waitlist rows and all original appointments are byte-identical except for the new appointment. Exactly one audit_log row for this promotion and one ops_reports 'waitlist_promotion' summary row for this batch must exist. promoted_count and the slot must agree between a Python re-simulation and SQL.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: location-1 waiting entries; expected winner = min by (priority rank, created_at). Assert new appointment exact fields; winner status 'booked'; other waitlist rows unchanged; appointment"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "waitlist + appointments + audit_log + ops_reports", "expect": "one winner booked, one new appointment in first free slot, one audit, one summary row" },
+      { "type": "dual_path", "collection": "waitlist and appointments", "expect": "winner identity and first-free slot agree between Python filter and SQL" }
     ]
   },
+  "hazards": [
+    "Waitlist entries not at location 1 (ids 2, 3, 5, 6) must remain 'waiting'. A solution that promotes a non-loc1 entry (e.g., id 2 at location 2) fails.",
+    "The lower-priority location-1 entry (id 4, priority 'work_in') must remain 'waiting'; only the winner (id 1, priority 'urgent', earliest created_at) becomes 'booked'.",
+    "The first free slot is not always Exam 1 at 09:00. On 2026-09-30, Exam 1 09:00 is occupied by appointment ids 469 and 545 (status scheduled/confirmed), so the first free slot is Exam 2 at 09:00. A hardcoded 'Exam 1 / 09:00' solution will create a double-booking and fail the canary/appointment check.",
+    "A slot is considered occupied only by scheduled/confirmed/checked_in appointments. completed and no_show appointments on the episode date are not blockers.",
+    "Start time must be at or after 09:00 and end time exactly 30 minutes later.",
+    "The provider must be id 1 (Dr. Elena Alvarez), not derived from the waitlist entry or left null.",
+    "Idempotency: a rerun must not create duplicate appointments or duplicate audit/ops_reports rows. The gold must detect an already-booked winner or an existing matching appointment and skip creation."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary appointment waitlist priority urgent work_in promotion",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Veterinary Waitlist Software | Fill Cancellations Fast with Oliver",
+          "Veterinary Scheduling & Queue Management Software | WaitWell",
+          "Veterinary Queue Management System & Vet Check-In – NextMe"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Priority-rank ordering with a timestamp tiebreak; agents often take the first row or use wrong rank order."
+    "uniqueness_searches": [
+      {
+        "query": "RL benchmark veterinary waitlist promotion free slot search location priority",
+        "top_results": [
+          "Veterinary Urgent Care Triage Waitlist with Severity Sorting | RationalGo",
+          "Ally Urgent Veterinary Care – NextMe Veterinary Waitlist Case Study",
+          "Veterinary Scheduling Software | skdul"
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 turns a single fixed-slot promotion into a schedule-aware, single-winner promotion. The agent must find the first free 30-minute slot at a specific location, handle a non-loc1 decoy and a lower-priority loc1 decoy, avoid completed/no_show blockers, and produce an audit trail and summary. Dual-path derivation and idempotency are required across waitlist, appointments, audit_log, and ops_reports."
   }
 }

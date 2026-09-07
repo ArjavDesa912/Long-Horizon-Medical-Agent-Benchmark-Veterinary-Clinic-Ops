@@ -1,19 +1,20 @@
 {
   "task_id": "046_appointment_reminder_queue_fill",
   "name": "veterinary_clinic_system_046_appointment_reminder_queue_fill",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "workflow",
-  "surface": "frontend",
-  "instruction": "Tomorrow's appointment reminders, batched. For every appointment with status 'scheduled' or 'confirmed' whose appointment_date equals the episode date + 1 day, push one reminder_queue row: {kind: 'appointment_reminder', patient_id, owner_id: <the patient's owner>, message: 'See you tomorrow at <start_time> for <PatientName>.', status: 'queued', queued_by: 'system', queued_at: episode timestamp, due_date: <the appointment date>}. Skip appointments for patients that already appear in ANY queued reminder_queue row. Seeded rows untouched.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "aggregation", "reconciliation"],
+  "surface": "backend",
+  "instruction": "Refill the appointment-reminder queue for the next 7 days, batched under the episode batch code. The eligible window is appointment_date between episode_date + 1 day and episode_date + 7 days inclusive, status 'scheduled' or 'confirmed'. For each eligible appointment whose patient does not already appear in any queued reminder_queue row (any kind) as of the start of the run, push one reminder_queue row: kind 'appointment_reminder', patient_id, owner_id (from the patient record), due_date set to the appointment's date, message 'Appointment reminder: <PatientName> on <YYYY-MM-DD> at <start_time>.', status 'queued', queued_by 'system', queued_at the episode timestamp, batch_code, channel copied from the active reminder_templates row whose trigger is 'appointment_reminder' (the template is a real appointment-reminder template; do not hardcode the channel), and priority 'high' if the appointment reason contains any of the urgent keywords 'vomit', 'limping', 'lameness', or 'ear infection' (case-insensitive), otherwise 'normal'. Patients who already have any queued reminder of any kind (e.g., vaccination_due or boarding_checkin) must be skipped entirely. Delete any existing appointment_reminder rows for this batch before pushing new ones; all other reminder_queue rows must remain untouched.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 11,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps must be measured against a live container in the QC session; do not set final values without a real gold run.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,31 +23,42 @@
     "veterinary_clinic_system_reminder_queue"
   ],
   "success_criteria": {
-    "summary": "Expected = scheduled/confirmed appointments with dp(date)==ep+1d, excluding patients in any snapshot queued reminder. Assert exact rows incl. owner join and message format; total == 4 + E; seeded 4 unchanged.",
+    "summary": "One new appointment_reminder row per eligible appointment whose patient has no pre-existing queued reminder. Exact fields (message, due_date, channel, priority, batch_code) verified per row. Seeded reminder_queue rows byte-identical. Counts and priority totals recomputed by raw-row Python filter and independent SQL and must agree.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Expected = scheduled/confirmed appointments with dp(date)==ep+1d, excluding patients in any snapshot queued reminder. Assert exact rows incl. owner join and message format; total == 4 + E; seeded 4 un"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_reminder_queue", "expect": "exact per-row match of new appointment_reminder rows keyed by patient_id+due_date, seeded rows unchanged" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_appointments", "expect": "total eligible count, per-priority counts, and excluded-patient counts agree between raw-row filter and SQL" }
     ]
   },
+  "hazards": [
+    "Existing queued reminder_queue patients are decoys: row id 1 (patient 2, vaccination_due, queued), id 2 (patient 5, vaccination_due, queued), id 4 (patient 8, boarding_checkin, queued). For episode dates around 2026-09-27, those patients also have upcoming appointments in the 7-day window (patient 5 has appointment id 400 on 2026-09-29; patient 8 has appointment id 543 on 2026-09-30). A solution that does not check the live queued state will produce duplicate reminders.",
+    "Same-day (episode date) scheduled/confirmed appointments must not receive a next-day reminder. For episode 2026-09-30, examples include id 69 (confirmed, Dental prophylaxis consult), id 112 (confirmed, Skin allergy flare-up), and id 125 (scheduled, Vomiting since yesterday) — all on 2026-09-30. An off-by-one date filter (>= episode date instead of > episode date) will queue them.",
+    "Stale scheduled/confirmed appointments with dates before the episode date are not eligible. Example: id 74 (scheduled, Ear infection re-check, 2026-09-27) is before episode 2026-09-30 but remains in 'scheduled' status; a solution without the lower date bound may queue it.",
+    "The active appointment_reminder template has trigger 'appointment_reminder' and channel 'sms' (reminder_templates id 5). A hardcoded channel 'email' or using the first template will fail.",
+    "Priority classification is by keyword, not by appointment priority field. 'Vaccine boosters due' (routine) and 'Vomiting since yesterday' (urgent) can look similar in length; an agent that matches 'vaccine' inside 'vomiting' or vice versa will misclassify. 'Annual wellness exam' is routine, 'Ear infection re-check' is urgent, and 'Chronic kidney disease monitoring' is standard.",
+    "Idempotency: a second run must delete the batch's own appointment_reminder rows (identified by kind + batch_code) before rewriting; otherwise the second run would double the queue and the skip-patient logic would exclude legitimate rows."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary appointment reminder best practices timing SMS email no-show reduction study",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Are your reminders persuasive enough? - Veterinary Practice News (veterinarypracticenews.com)",
+          "Medical Updates and Appointment Confirmations: Pet Owners' Perceptions | Frontiers (frontiersin.org)",
+          "How to Create an Effective Reminder System for Your Veterinary Clinic | IDEXX (software.idexx.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Day-precision targeting (exactly tomorrow, not 'future') plus an anti-duplication exclusion against live queue state."
+    "uniqueness_searches": [
+      {
+        "query": "appointment reminder queue fill veterinary multi-day priority classification benchmark task",
+        "top_results": [
+          "Veterinary Clinic Receptionist Scheduling Tool | RationalGo (rationalgo.ai)",
+          "Veterinary Scheduling & Queue Management Software | WaitWell (waitwellsoftware.com)",
+          "AI Automation for Veterinary Clinics (2026) | A8gent (a8gent.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines a multi-day reminder fill with live queue de-duplication, channel lookup from a template, reason-based urgency classification, and batch-keyed idempotency. The verifier uses dual-path appointment counts and per-row priority/channel checks at 10x appointment volume. No public benchmark combines these three concerns (queue fill + template-driven channel + triage priority) in one task."
   }
 }

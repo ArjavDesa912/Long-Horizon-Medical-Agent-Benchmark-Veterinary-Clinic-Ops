@@ -1,52 +1,67 @@
 {
   "task_id": "068_patient_species_weight_sanity",
   "name": "veterinary_clinic_system_068_patient_species_weight_sanity",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "repair",
+  "category": ["repair", "websearch", "aggregation"],
   "surface": "websearch",
-  "instruction": "Sanity-check patient weights against species-typical ranges (verify typical ranges online if unsure): canine 1\u201390 kg, feline 1\u201315 kg, avian 0.02\u20132 kg, exotic 0.02\u201315 kg, equine 200\u2013700 kg, other 0.02\u2013200 kg. For every patient whose weight_kg falls outside its species range, set weight_flag='out_of_range' and weight_checked='<batch_code>'; for every in-range patient set weight_flag='plausible' (no tag field). Patients with missing weight get weight_flag='missing'. All other fields byte-identical.",
+  "instruction": "Run a species/weight sanity audit on the patients table. Use current veterinary references (AAHA/AAFP for canine and feline, avian/exotic/equine references for the others) to determine species-typical adult weight ranges in kilograms. Do not use any hardcoded ranges from prompts or seed files.\n\nFor every patient:\n- If weight_kg is missing, set weight_flag='missing' (no weight_checked tag).\n- If weight_kg is within the species-typical range, set weight_flag='plausible' (no tag).\n- If weight_kg is strictly outside the species-typical range, set weight_flag='out_of_range' and weight_checked='<batch_code>'.\n\nThen:\n1. Push one ops_reports row per species plus an 'ALL' rollup report='weight_sanity' with batch_code, species, total, plausible, out_of_range, missing.\n2. For every out_of_range patient, push one reminder_queue row kind='weight_recheck', status='queued', patient_id, message 'Patient <patient_id> weight out of species range - batch <batch_code>', queued_by='system', queued_at the episode timestamp.\n3. Push one audit_log row: action='WEIGHT_SANITY_AUDIT', actor='system', actor_role='system', target_collection='patients', target_id='batch', details='Batch <batch_code> - weight sanity audit complete', occurred_at the episode timestamp.\n\nDo not change weight_kg, species, or any other patient field.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 12,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_patients"
+    "veterinary_clinic_system_patients",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Recompute expected flag per patient from snapshot weights vs documented ranges; assert exact flag values and tag presence only on out_of_range rows; count 30.",
+    "summary": "Every patient has weight_flag set to 'plausible', 'out_of_range', or 'missing'. out_of_range rows also have weight_checked=batch. ops_reports has one weight_sanity row per species plus an ALL rollup with counts matching live data. reminder_queue has one weight_recheck per out_of_range patient. audit_log has the batch entry. No other patient fields change.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute expected flag per patient from snapshot weights vs documented ranges; assert exact flag values and tag presence only on out_of_range rows; count 30."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_patients", "expect": "exact weight_flag and weight_checked tag on every patient" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_patients", "expect": "per-species and ALL counts agree between Python filter and SQL GROUP BY/CASE" }
     ]
   },
+  "hazards": [
+    "All 21 avian patients have weight_kg = 1.0 (e.g. ids 7, 23, 31, 38, 95, 100, 106, 112, 135, 150). The species-typical avian range must have an upper bound above 1.0; a wrong upper bound of 1.0 or less would flag every avian as out_of_range.",
+    "7 small canines are at 4-5 kg (ids 66, 144, 146, 166, 201, 205, 264). The canine lower bound must be at or below 4 kg; a lower bound above 4 would misclassify these as out_of_range.",
+    "16 equine patients range from 398 kg to 518 kg (e.g. id 211 is 398 kg). The equine lower bound must be at or below 398; a common equine 'adult' lower bound of 400 kg would flag id 211.",
+    "All 300 patients have a non-null weight_kg, so missing=0. A solution that sets any weight_flag='missing' on a non-null weight fails.",
+    "Canine, feline, exotic, and avian ranges are very different; a solution that applies the canine range to all species or ignores species will misclassify the non-canine patients."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "AAHA canine feline avian exotic equine weight range kg veterinary reference 2026",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "2021 AAHA Nutrition and Weight Management Guidelines - AAHA",
+          "2021 AAHA Nutrition and Weight Management (PDF)",
+          "Calculation of standard bodyweights for dogs, cats, rabbits, and guinea pigs - PLOS One"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Domain-range table (must be applied exactly) + three-way classification with tag-on-one-class-only asymmetry."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary patient species weight flag out of range benchmark audit",
+        "top_results": [
+          "Calculation of standard bodyweights for dogs, cats, rabbits, and guinea pigs - PLOS One",
+          "Free Vet Tech Report Sheet Template 2026 - VetVisit AI",
+          "How to Write a Veterinary SOAP Note (Step-by-Step) - VetVisit AI"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines web-search-derived species weight ranges, per-patient flag updates, per-species summary report, out-of-range reminder queue, and audit log, with dual-path SQL vs API count verification and idempotent re-run."
   }
 }

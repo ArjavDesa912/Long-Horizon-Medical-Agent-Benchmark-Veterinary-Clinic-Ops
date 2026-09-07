@@ -1,60 +1,67 @@
 {
   "task_id": "005_vaccine_lot_recall_trace",
   "name": "veterinary_clinic_system_005_vaccine_lot_recall_trace",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "workflow", "reconciliation"],
   "surface": "backend",
-  "instruction": "The manufacturer recalled one vaccine lot: the lot_number that appears most frequently across all vaccination records is suspect (break a tie by choosing the alphabetically smallest lot_number). Find every patient who received that lot, and for each affected patient's owner push one communications row with channel='phone', direction='outbound', subject='Vaccine lot recall \u2014 <lot_number>', body='Recall callback scheduled for <PatientName> (lot <lot_number>).', logged_by='Dr. Alvarez', and occurred_at on the episode date. One row per affected patient (not per vaccination). Do not touch any seeded communications.",
+  "instruction": "A manufacturer recalled one vaccine lot. The recalled lot is the lot_number that appears most frequently across all vaccination records; if multiple lots tie for the highest count, choose the alphabetically smallest lot_number. (1) Find every patient who received at least one vaccination from that lot. (2) For each affected patient, push one communications row to the owner with patient_id set: channel='phone', direction='outbound', subject='Vaccine lot recall — <lot_number>', body='Recall callback scheduled for <PatientName> (lot <lot_number>).', logged_by='Dr. Alvarez', occurred_at=episode. (3) Push one reminder_queue row per affected patient with kind='recall_callback', status='queued', queued_by='system', queued_at=episode, due_date=episode, vaccine_type=<recalled vaccine_type>, lot_number=<lot_number>, batch_code=<batch_code>, patient_id, and message '<PatientName> recall callback for lot <lot_number>'. (4) Push exactly one ops_reports row with report='lot_recall_trace', batch_code, lot_number, vaccine_type, total_vaccinations, affected_patients, affected_owners, on_hand (sum of pharmacy_inventory quantity_on_hand for the recalled vaccine type), and coverage_gap (max(0, affected_patients - on_hand)). (5) Append one audit_log entry with action='LOT_RECALL_TRACE', actor='system', actor_role='system', target_collection='vaccinations', target_id=<batch_code>, details summarizing the lot and counts, and occurred_at=episode. Do not touch any other rows.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session (anti-brute-force); this session cannot run against a container",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session; placeholder only",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_communications"
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Recompute modal lot from snapshot vaccinations (count per lot_number, tie -> alphabetical min). Affected = distinct patient_ids having that lot. Assert exactly one new communications row per affected patient with all fields exact; assert seeded 16 rows unchanged; total == 16 + len(affected); no extras.",
+    "summary": "The recalled lot is the mode of lot_number with alphabetical tiebreak. Affected patients = distinct patient_ids with that lot. Exactly one new communications and one new recall_callback reminder per affected patient, one ops_reports summary row, and one audit_log entry. The report's counts and inventory on_hand must be computed two independent ways (raw Python + SQL) and agree with each other and with what was written. Seeded rows unchanged; all other collections canary-intact.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute modal lot from snapshot vaccinations (count per lot_number, tie -> alphabetical min). Affected = distinct patient_ids having that lot. Assert exactly one new communications row per affected "
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside the declared blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_communications", "expect": "one new phone/outbound row per affected patient with exact subject/body; seeded 160 communications unchanged" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_vaccinations", "expect": "modal lot, affected-patient count, and inventory on_hand computed two ways (Python + SQL) and matched" }
     ]
   },
+  "hazards": [
+    "The most frequent lot count is a 3-way tie at frequency 2: 'BO-6987-A', 'FV-1313-C', 'FV-1412-A'. The alphabetically smallest ('BO-6987-A') is the recalled lot; choosing the first lot by API order or ignoring tiebreak fails.",
+    "The two non-modal lots with frequency 2 are decoys; any solution that recalls more than one lot fails.",
+    "Affected patients are distinct by patient_id, not by owner_id; one owner may have multiple pets, but the task is one communication and one reminder per affected patient.",
+    "The recalled lot's vaccine_type is not stated in the instruction and must be derived from the affected rows (in this seed it is 'bordetella'); inventory on_hand must use that type, not a hardcoded vaccine.",
+    "Every aggregate (total_vaccinations, affected_patients, affected_owners, on_hand) requires dual-path verification."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "veterinary vaccine lot recall most frequent lot number trace affected patients",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "Boehringer Ingelheim Voluntary Rabies Vaccine Recall - AzVMA",
+          "IMRAB 3 TF Canine/Feline/Ferret Rabies Vaccine Recall | Worms & Germs Blog",
+          "Recalled rabies vaccines shipped to RI veterinarians may contain sterile water | WPRI.com"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "vaccine lot recall most frequent lot_number trace veterinary benchmark",
+        "query": "veterinary vaccine lot modal tiebreak recall callback reminder inventory coverage audit log benchmark",
         "top_results": [
           "Veterinary Vaccine Lot Number and Expiration Tracker | RationalGo App Builder",
-          "Boehringer Ingelheim Voluntary Rabies Vaccine Recall - Missouri Veterinary Medical Association"
+          "Boehringer Ingelheim Voluntary Rabies Vaccine Recall - Missouri Veterinary Medical Association",
+          "Pet Vaccination Schedule and Reminder System | RationalGo App Builder"
         ]
       }
     ],
-    "differentiation_note": "Mode-with-tiebreak aggregation + distinct-patient fan-out through a patient\u2192owner join; off-by-one duplicates are the common failure."
+    "differentiation_note": "Adds a true modal-lot tiebreak hazard, multi-channel owner outreach (communications + reminder_queue), inventory coverage, and audit logging to the base lot-trace mission. The entire outcome is a single combined end-state verified by dual-path aggregates."
   }
 }

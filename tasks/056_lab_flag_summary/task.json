@@ -1,19 +1,21 @@
 {
   "task_id": "056_lab_flag_summary",
   "name": "veterinary_clinic_system_056_lab_flag_summary",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "workflow", "idempotency"],
   "surface": "backend",
-  "instruction": "One ops_reports row {report: 'lab_flags', batch_code, critical: <count of lab_results with flag 'critical'>, abnormal: <count 'abnormal'>, normal: <count 'normal'>, total: <all rows>}.",
+  "instruction": "Produce the lab flag snapshot for this episode under the batch code in ops_meta. The snapshot has three parts, all derived from live lab_results and the patients join. (1) Rollup: one ops_reports row report='lab_flag_summary' with critical, abnormal, normal, total counts over all lab_results, plus pct_critical, pct_abnormal, and pct_flagged rounded to one decimal. (2) By-test breakdown: one ops_reports row report='lab_flag_by_test' per distinct test_name, each with test_name, critical, abnormal, normal, and total for that test. (3) By-species breakdown: one ops_reports row report='lab_flag_by_species' per species present among the patients referenced by lab_results (join patients), each with species, critical, abnormal, normal, total, and pct_of_total (round(100*species_total/rollup_total,1)). Any lab result whose patient_id cannot be resolved to a patient is counted under species='unknown'. If any of these report rows already exist for this batch, delete and rewrite them so the report is current. Do not modify lab_results or patients.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 6,
+  "max_steps": null,
+  "_max_steps_note": "Measure via live gold run in QC session; do not guess.",
+  "par_steps": null,
+  "_par_steps_note": "Measure via live gold run in QC session; do not guess.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,31 +24,41 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live lab_results; exact ints; nonce.",
+    "summary": "From seed: 42 lab_results with flag counts critical=1, abnormal=10, normal=31. Rollup row must match these counts plus pct_critical=2.4, pct_abnormal=23.8, pct_flagged=26.2. By-test rows: CBC(3abn,4norm,7total), FeLV/FIV snap test(3norm), Fecal ova & parasites(1abn,5norm), Heartworm antigen(2abn,2norm), SDMA(1abn), Serum chemistry panel(1crit,7norm), Thyroid panel (T4)(5norm), Urinalysis(3abn,5norm). By-species rows: canine(1crit,7abn,15norm,23total,54.8%), equine(1norm), exotic(1norm), feline(3abn,14norm,17total,40.5%). All rows must carry the batch_code and be the only rows of those report types for this batch. Dual-path counts (Python vs SQL) must agree.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live lab_results; exact ints; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "ops_reports", "expect": "exactly 13 rows (1 rollup + 8 by-test + 4 by-species) keyed by report type and batch_code" },
+      { "type": "dual_path", "collection": "lab_results/patients", "expect": "every count in rollup, by-test, and by-species recomputed via SQL and Python; both agree" }
     ]
   },
+  "hazards": [
+    "lab_results id=1 is the only 'critical' row (Serum chemistry panel, patient 4). A solution that folds 'critical' into 'abnormal' will report critical=0 and abnormal=11 and fail the rollup.",
+    "lab_results id=7 references patient 27, whose patients row has status='transferred' (row evidence: patient id=27 species='feline' status='transferred'). A solution that excludes transferred-patient labs from the snapshot will under-count feline to 16 and total to 41; 056 is a full snapshot and must include it.",
+    "The by-species breakdown requires a join through patients; a solution that counts raw lab rows without resolving patient species will miss the species grouping entirely.",
+    "The by-test and by-species row set is dynamic (test names and species appear only when present); a hardcoded row list will fail on reseed.",
+    "ops_reports must be delete-then-rewritten per batch to stay idempotent; duplicate or stale-batch rows fail the count checks."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "veterinary lab results flagging critical abnormal normal quality dashboard",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "Reference Intervals and Result Flagging in Veterinary Laboratories (aaha.org)",
+          "IDEXX VetConnect critical result notification workflow",
+          "Veterinary lab report QC dashboard examples"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Baseline distribution report; ensures the ops_reports channel is exercised with exact counts."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary lab flag summary by test and species multi-level ops_report benchmark",
+        "top_results": [
+          "Multi-level veterinary lab reporting benchmark",
+          "Species-stratified lab flag aggregation task",
+          "Vet clinic data aggregation by test and species"
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 turns a single count row into a three-level lab quality snapshot (rollup, by-test, by-species) with percentage fields and dual-path verification. It requires a patients join and treats 'critical' as its own category, not an abnormal variant."
   }
 }

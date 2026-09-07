@@ -1,52 +1,66 @@
 {
   "task_id": "066_owner_contact_normalization",
   "name": "veterinary_clinic_system_066_owner_contact_normalization",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "update",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["update", "workflow", "aggregation"],
   "surface": "backend",
-  "instruction": "Normalize owner contact data for the SMS gateway: rewrite every owner's phone to E.164-ish digits-only form '+1' followed by the 10 digits (strip punctuation; all seeded numbers are US 10-digit like '(828) 555-0101'), and lowercase every owner's email. Add field contact_normalized='<batch_code>' to every row you change. Rows already compliant keep their values but still get the tag. Do not change names, addresses, or balances.",
+  "instruction": "The practice is migrating to an SMS gateway. Normalize every owner's contact data and run a contact-quality audit.\n\n1. For every owner, rewrite phone to E.164-ish digits-only form: strip all non-digits, then prepend '+1' followed by the last 10 digits (if fewer than 10 digits, prepend '+1' followed by whatever remains). Lowercase every owner's email. Set contact_normalized='<batch_code>' on every owner row, even rows already compliant. Do not change names, addresses, or balances.\n2. Create one ops_reports row report='contact_normalization_summary', batch_code, total_owners, normalized_count, duplicate_phone_count, missing_email_count.\n3. For every owner whose normalized phone collides with another owner (same normalized number, different owner id), push a reminder_queue row kind='contact_reconcile', status='queued', owner_id set, message 'Duplicate phone <phone> with owners <sorted-owner-ids> - batch <batch_code>', queued_by='system', queued_at the episode timestamp.\n4. Push one audit_log row: action='OWNER_CONTACT_NORMALIZED', actor='system', actor_role='system', target_collection='owners', target_id='batch', details='Batch <batch_code> - normalized <N> owner contacts, <D> duplicate phones', occurred_at the episode timestamp.\n\nDo not merge or delete owners. All changes must be keyed by the live batch code.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_owners"
+    "veterinary_clinic_system_owners",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "For each snapshot owner: expected phone '+1'+digits(10), email lower. Assert exact values + tag on ALL 22 rows (all seeded phones have punctuation); assert other fields unchanged; count 22.",
+    "summary": "Every owner row has phone '+1' + last 10 stripped digits, email lowercased, contact_normalized=batch. ops_reports has exactly one contact_normalization_summary row with counts matching live data. reminder_queue has exactly one contact_reconcile row per duplicate owner. audit_log has at least one OWNER_CONTACT_NORMALIZED row for the batch. All other owner data unchanged.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "For each snapshot owner: expected phone '+1'+digits(10), email lower. Assert exact values + tag on ALL 22 rows (all seeded phones have punctuation); assert other fields unchanged; count 22."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_owners", "expect": "exact normalized phone/email and contact_normalized tag on all 220 owners" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_owners", "expect": "total, duplicate, and missing counts agree between Python filter and SQL COUNT" }
     ]
   },
+  "hazards": [
+    "All 220 owner phone values contain non-digit characters (parentheses, spaces, hyphens), e.g. owner 1 '(828) 555-0101' and owner 100 '(828) 555-1099'. A solution that skips rows it thinks are 'already clean' would leave at least some rows unchanged.",
+    "Owners 1 (Margaret Whitfield) and 22 (Faye Lovelace) both have phone '(828) 555-0101', so their normalized phone is identical '+18285550101'. These are two distinct owners; the task is to flag the collision, not to merge or delete either.",
+    "Every owner has a non-empty email, so missing_email_count must be 0. A solution that invents a missing count based on blanks will fail.",
+    "The normalization must use the last 10 digits of the stripped number, not the first. With these 10-digit US numbers the result is the same, but a country-code mistake would break if any seed added a leading '1'."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice SMS gateway E.164 phone normalization duplicate owner phone reconciliation",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Mobile phone numbers that are available for Vello text messaging - ezyVet Knowledge Center",
+          "Remove Duplicates from Veterinary Patient and Client Data - dataclean.to",
+          "Eliminate Vet Intake Delays in 2026 - US Tech Automations"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Deterministic string normalization across a whole collection; the digits-only transform must preserve the area code correctly."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary owner contact normalization audit reminder queue duplicate phone benchmark",
+        "top_results": [
+          "How to clean PIMS data for better client experiences - Vetsource",
+          "Capture Lapsed Vaccines: 3 Reminder Workflows for 2026 - US Tech Automations",
+          "Fixing AVImark Reminders to Recover Recall Revenue - Staffingly"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines deterministic contact string normalization across 220 owners with a duplicate-phone audit that enqueues reconciliation tasks and writes an audit log, dual-path counts, and idempotent re-run."
   }
 }

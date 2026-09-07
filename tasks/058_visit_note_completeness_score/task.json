@@ -1,19 +1,21 @@
 {
   "task_id": "058_visit_note_completeness_score",
   "name": "veterinary_clinic_system_058_visit_note_completeness_score",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "workflow", "idempotency"],
   "surface": "backend",
-  "instruction": "Score documentation quality. A visit record is 'complete' iff subjective, objective, assessment, and plan are all non-empty strings AND weight_kg is a positive number. Create one ops_reports row {report: 'note_completeness', batch_code, total_visits, complete, incomplete, completeness_pct: <round(100*complete/total,1)>, incomplete_ids: <comma-joined ascending ids of incomplete rows, or ''>}.",
+  "instruction": "Produce the documentation-quality snapshot for this episode under the batch code in ops_meta. A visit record is 'complete' only if all four of its SOAP fields (subjective, objective, assessment, plan) are non-empty strings after trimming, weight_kg is a number greater than zero, and problems is a non-empty list containing at least one documented problem. Write two sets of ops_reports rows. (1) One rollup row report='note_completeness' with batch_code, total_visits, complete, incomplete, completeness_pct (round(100*complete/total,1)), and incomplete_ids (comma-joined ascending ids of incomplete rows, or '' if none). (2) One row report='note_completeness_by_provider' per provider_id that appears in visit_records, with provider_id, provider_name (from the providers join), total_visits, complete, incomplete, and completeness_pct. If any of these report rows already exist for this batch, delete and rewrite them. Do not modify visit_records or providers.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "Measure via live gold run in QC session; do not guess.",
+  "par_steps": null,
+  "_par_steps_note": "Measure via live gold run in QC session; do not guess.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,31 +24,41 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live visit_records with the exact predicate; assert ints, pct within 0.05, exact CSV ids; nonce.",
+    "summary": "From seed: 371 visit_records, 163 complete and 208 incomplete, completeness_pct=43.9. Incomplete ids: 2,3,4,6,7,8,10,12,13,16,21,22,24,25,27,28,29,31,32,35,37,40,41,42,44,46,48,49,54,55,56,58,59,60,61,63,65,66,68,69,70,71,73,74,75,76,77,78,83,84,89,95,98,101,103,104,105,106,109,110,111,113,114,115,116,117,120,121,123,124,126,127,128,129,132,135,139,140,142,143,144,146,147,148,149,151,152,153,157,158,160,161,168,173,174,177,178,179,182,183,184,185,189,190,193,195,196,199,203,205,207,209,210,213,215,216,219,223,226,228,229,230,231,233,234,237,238,241,242,243,248,251,252,253,254,255,257,259,260,261,262,264,265,266,267,268,272,274,275,276,277,278,280,282,285,287,289,291,292,294,295,297,298,299,300,301,302,303,306,307,309,310,312,314,315,316,317,318,320,321,323,324,325,327,330,332,333,336,337,341,342,343,344,345,351,352,353,354,356,357,359,361,362,364,366,367,370,371. Provider breakdown: Dr. Elena Alvarez (provider 1) 53/23/30/43.4, Dr. Marcus Chen (2) 68/30/38/44.1, Dr. Priya Natarajan (3) 121/57/64/47.1, Dr. Sam Okafor (4) 129/53/76/41.1. Dual-path counts (SQL vs Python) must agree.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live visit_records with the exact predicate; assert ints, pct within 0.05, exact CSV ids; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "ops_reports", "expect": "exactly 1 rollup + 4 by-provider rows for this batch" },
+      { "type": "dual_path", "collection": "visit_records/providers", "expect": "completeness counts and provider breakdown recomputed via SQL and Python; both agree" }
     ]
   },
+  "hazards": [
+    "visit_records id=371 is the only row with an empty plan under the old four-field predicate, but the hardmode rule also requires a non-empty problems list. With the new rule 208 rows are incomplete (e.g., id=2,3,4 have problems:[]). A solution using only the v1 predicate under-reports incomplete and fails.",
+    "The problems field is a list of objects; treating problems:[] or a non-list as complete will under-count incomplete rows. Confirmed: rows like id=2 have 'problems': [].",
+    "Provider breakdown must join providers by id and include provider_name. Only providers 1-4 have visit_records; a solution that emits all 9 providers or omits names fails.",
+    "incomplete_ids must be a comma-joined sorted list. Confirmed: the incomplete set is 208 ids; the expected string is sorted ascending.",
+    "ops_reports must be delete-then-rewritten per batch. Duplicate or stale batch rows fail the count checks."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "veterinary SOAP note completeness documentation quality score problem list",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "AAHA SOAP note documentation guidelines",
+          "Veterinary medical record completeness checklist",
+          "Problem oriented veterinary medical record POMR"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Multi-clause completeness predicate + an id listing that must be sorted \u2014 agents emit unsorted ids or off-by-one predicates."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary visit note completeness score provider breakdown benchmark task",
+        "top_results": [
+          "Veterinary EMR completeness score by provider",
+          "SOAP note quality dashboard benchmark",
+          "Multi-provider documentation score task"
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 adds the problems-list requirement to the completeness predicate, turning a single incomplete row into 208. It adds a provider-name join and a per-provider breakdown, and uses dual-path SQL/Python verification."
   }
 }

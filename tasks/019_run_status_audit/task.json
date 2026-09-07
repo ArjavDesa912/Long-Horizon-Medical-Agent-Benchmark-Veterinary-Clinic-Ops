@@ -1,52 +1,69 @@
 {
   "task_id": "019_run_status_audit",
   "name": "veterinary_clinic_system_019_run_status_audit",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "repair",
+  "category": ["repair", "aggregation", "reconciliation"],
   "surface": "backend",
-  "instruction": "The occupancy board and the reservation book disagree somewhere. A run is consistent iff: (status 'occupied' <=> there is a checked_in reservation on that run) AND (occupied runs have current_patient_id equal to that reservation's patient) AND (non-occupied runs have no current_patient_id). Find every inconsistent run and repair the RUN side only: set status 'occupied' + correct current_patient_id where a checked_in reservation exists; otherwise set status 'available' and current_patient_id null (unless the run is 'cleaning' with no occupant \u2014 leave those as 'cleaning'). Never edit reservations. Record your work: add field audited='<batch_code>' to every run you changed.",
+  "instruction": "Run the boarding occupancy-board audit as of the episode date. The occupancy board and reservation book must agree.\n\nFor every boarding_runs record:\n- If there is a checked_in reservation assigned to that run (run_id matches and reservation status = 'checked_in'), the run must be status='occupied' and current_patient_id must equal that reservation's patient_id.\n- If there is no checked_in reservation on that run, the run must be 'available' unless its status is already 'maintenance' or 'cleaning' (leave those as-is).\n\nFor every run that is not consistent with the rule above, repair the run side only: set the correct status and current_patient_id, and push an audit_log entry with action='RUN_STATUS_REPAIR', actor='system', actor_role='front_desk', target_collection='boarding_runs', target_id=<run_id>, details='Run <run_number> repaired to <status> for batch <batch_code>', occurred_at=<episode_date with time>, batch_code.\n\nRegardless of whether a run was repaired, set `audited` = the live batch_code on every run.\n\nA 'run_conflict' is a reserved reservation whose stay overlaps the episode date (check_in <= episode_date <= check_out) and whose run is currently occupied by a different checked_in reservation. Count these in the report but do not modify any reservation.\n\nFinally, create exactly one ops_reports row 'boarding_run_audit' keyed by batch_code with: episode_date, audited_run_count (must equal the total number of boarding_runs), conflict_count, run_status_summary (dict {location_name: {available, occupied, maintenance, cleaning}}), and repaired_run_count. Overwrite any existing row for this batch.\n\nDo not touch any reservation.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 12,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_boarding_runs"
+    "veterinary_clinic_system_boarding_runs",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute consistency from live reservations + snapshot runs. Assert every run now satisfies the invariant given live reservation state; assert each changed run has audited==nonce; assert runs not needing change are byte-identical to snapshot; assert reservations untouched (canary).",
+    "summary": "Every run has audited=batch_code. Each run's status and current_patient_id match the live checked_in reservation state: 'occupied' + reservation.patient_id where a checked_in reservation exists, otherwise 'available' unless 'maintenance'/'cleaning'. Any repaired run has an audit_log entry. The ops_reports 'boarding_run_audit' row contains the correct audited_run_count (= total runs), conflict_count (reserved overlapping an occupied run), run_status_summary, and repaired_run_count. All aggregates are recomputed via raw-row Python and independent SQL. No reservations are modified.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute consistency from live reservations + snapshot runs. Assert every run now satisfies the invariant given live reservation state; assert each changed run has audited==nonce; assert runs not nee"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_boarding_runs", "expect": "Every run has audited=batch and correct status/current_patient_id; only status, current_patient_id, and audited may change" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_audit_log", "expect": "One RUN_STATUS_REPAIR entry per repaired run, no extras" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "Exactly one boarding_run_audit row per batch with correct counts and summary" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_boarding_reservations", "expect": "conflict_count and run_status_summary agree between raw-row Python and independent SQL JOIN/GROUP BY" }
     ]
   },
+  "hazards": [
+    "All runs are already consistent with checked_in reservations in the snapshot: runs 1-5 are 'occupied' with current_patient_id matching reservations 1-5 (patients 2, 4, 6, 8, 10), and runs 6-17 are 'available'. A solution that 'repairs' runs based on the most recent reservation (including reserved) will set run 3 to patient 77 (reservation 99) or run 4 to patient 73 (reservation 98) and fail.",
+    "The `audited` field must be set on all 17 runs, not just the ones that changed. A solution that only touches inconsistent runs leaves the other 12 runs un-audited.",
+    "Run conflicts at default episode 2026-09-30: reserved reservations 98 (run 4, occupied by reservation 4) and 99 (run 3, occupied by reservation 3) overlap the episode. These are the only two conflicts; other active reserved reservations are on available runs.",
+    "Reserved reservations that are past their check_out (e.g., id 8 check_out 2026-09-28 at default ep) must not be counted as conflicts because they do not overlap the episode.",
+    "Runs with status 'maintenance' or 'cleaning' and no checked_in reservation must be left as-is. The seed has none, but a verifier will test this branch on reseed.",
+    "Idempotency: a second run must set the same audited value and leave the same final state, and must not duplicate the ops_reports or audit_log rows."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary boarding occupancy board reconciliation run status audit",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "USTech Automations — Capture Boarding Revenue: Gingr vs PetDesk vs Square 2026 (https://ustechautomations.com/resources/blog/automate-veterinary-boarding-management-gingr-petdesk-square-2026)",
+          "Kennel Connection Help Center — Occupancy Reports (https://cloudhelp.kennelconnection.com/occupancy-reports/)",
+          "IDEXX — Boarding and Grooming User Guide (https://software.idexx.com/sites/default/files/software-downloads/boarding-and-grooming-user-guide_0.pdf)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Bidirectional invariant repair (both false-occupied and false-available directions) with a leave-cleaning-alone exception; symptom-not-rows phrasing."
+    "uniqueness_searches": [
+      {
+        "query": "boarding run status audit conflict reserved overlapping occupied run task benchmark",
+        "top_results": [
+          "Revelation Pets — Managing Runs (https://support.revelationpets.com/hc/en-us/articles/13543108173197-Managing-Runs)",
+          "PocketSuite — Prevent Overbooking Across Kennels and Suites (https://pocketsuite.io/post/preventing-overbooking-across-kennels-suites-and-daycare-runs/)",
+          "PETSAppeal Blog — How PETSAppeal's Conflict Detection System Prevents Double-Booking Chaos (https://pets-appeal.com/blog/how-petsappeals-conflict-detection-system-prevents-double-booking-chaos)"
+        ]
+      }
+    ],
+    "differentiation_note": "Redesigned around the live 10x seed: the old v1 'disagreement somewhere' premise no longer holds for the checked_in subset, but the snapshot has real reserved-occupied run conflicts and stale reserved dates. The v2 task audits all runs, sets audited on all of them, reports conflicts without modifying reservations, and uses dual-path verification."
   }
 }

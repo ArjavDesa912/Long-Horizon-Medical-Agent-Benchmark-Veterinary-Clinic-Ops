@@ -1,52 +1,65 @@
 {
   "task_id": "057_unlinked_lab_orphans",
   "name": "veterinary_clinic_system_057_unlinked_lab_orphans",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "repair",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["repair", "reconciliation", "aggregation", "idempotency"],
   "surface": "backend",
-  "instruction": "Data hygiene: every lab_results row must reference a patient that exists AND is not status 'transferred' (transferred patients' results belong to the receiving clinic). Find orphan rows (patient_id missing from patients, or pointing at a transferred patient) and mark them orphan=true with orphan_note='<batch_code>'. Do not delete anything; do not modify valid rows.",
+  "instruction": "Run the lab result integrity audit for this episode under the batch code in ops_meta. A lab_results row is 'unlinked' if any of the following hold: (a) its patient_id does not resolve to a patients row; (b) the patient it references has status='transferred'; or (c) the patient exists and is active but has zero visit_records rows (a lab result with no originating visit is an orphaned order). For each unlinked lab_results row, update it in place: set orphan=true and orphan_note to the batch code. Do not modify any valid rows and do not delete anything. Also write one ops_reports row report='lab_orphan_audit' with batch_code, unlinked_count, missing_patient_count, transferred_patient_count, no_visit_count, and flag_breakdown (object mapping each flag to its count among the unlinked rows). If the audit row already exists for this batch, overwrite it. The rule precedence for categorisation is missing > transferred > no_visit (a row is only counted in the first matching category).",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "_max_steps_note": "Measure via live gold run in QC session; do not guess.",
+  "par_steps": null,
+  "_par_steps_note": "Measure via live gold run in QC session; do not guess.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_lab_results"
+    "veterinary_clinic_system_lab_results",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: lab rows whose patient_id not in live patients ids or patient status=='transferred' -> assert orphan true + note nonce; others byte-identical; count 6.",
+    "summary": "From seed: 19 unlinked lab rows (missing_patient=0, transferred_patient=1, no_visit=18). Flag breakdown among unlinked rows: critical=1, abnormal=5, normal=13. All unlinked rows must have orphan=true and orphan_note=batch. All valid lab rows (23 rows, e.g., id=2,3,5,8) must remain byte-identical except for the ignored updated_at field. Exactly one ops_reports row report='lab_orphan_audit' for this batch with the counts and breakdown. Dual-path counts (Python vs SQL) must agree.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: lab rows whose patient_id not in live patients ids or patient status=='transferred' -> assert orphan true + note nonce; others byte-identical; count 6."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "lab_results", "expect": "exactly 19 rows updated with orphan=true/orphan_note=batch; 23 valid rows unchanged" },
+      { "type": "dual_path", "collection": "lab_results/patients/visit_records", "expect": "unlinked count and category counts recomputed via SQL and Python; both agree" }
     ]
   },
+  "hazards": [
+    "lab_results id=7 (patient 27) is a transferred-patient orphan. patients id=27 has status='transferred' and species='feline'. A solution that only checks missing patient_id will miss it.",
+    "lab_results id=1 (patient 4, Serum chemistry panel, flag='critical') is an orphan because patient 4 has no visit_records. It is the only critical lab row, so a solution that ignores the 'no visit record' condition will both under-count unlinked rows and leave the critical orphan unflagged.",
+    "Valid rows such as lab_results id=2 (patient 8, Heartworm antigen, flag='normal') and id=3 (patient 13, CBC, flag='abnormal') reference patients that exist, are active, and have visit_records. Marking them orphan fails the canary check.",
+    "Rule precedence is missing > transferred > no_visit. Patient 27 has no visit_records but is transferred; the lab row must be counted in transferred_patient_count, not no_visit_count.",
+    "Re-running the task must not duplicate the ops_reports audit row or create duplicate orphan fields; the gold deletes then rewrites the audit row and updates already-orphan rows with the same values."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "veterinary lab results orphaned patient no visit record data integrity",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "Veterinary laboratory quality assurance orphaned results",
+          "IDEXX VetConnect patient linking best practices",
+          "LIS orphan result workflow in veterinary clinics"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Referential-integrity audit across collections with a non-obvious second condition (transferred status)."
+    "uniqueness_searches": [
+      {
+        "query": "unlinked lab orphans transferred patient visit record join benchmark",
+        "top_results": [
+          "Veterinary multi-hop lab orphan detection task",
+          "Patient-transfer lab result quarantine benchmark",
+          "LIS reconciliation no-visit orphan pattern"
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 expands the v1 'missing or transferred' rule into a three-condition reconciliation (missing, transferred, or no originating visit) and requires a grouped `ops_reports` audit row with a per-flag breakdown. The no-visit condition requires a join through `visit_records`, making it a multi-hop integrity task with dual-path verification."
   }
 }

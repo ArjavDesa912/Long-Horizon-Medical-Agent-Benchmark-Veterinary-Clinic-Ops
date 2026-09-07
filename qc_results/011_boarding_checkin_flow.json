@@ -4,15 +4,15 @@
     "noop": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: reservation 7 status: expected 'checked_in', found 'reserved'"
+        "FAIL: reservation 6 status: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 0.9
+      "seconds": 3.2
     },
     "random": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: reservation 7 status: expected 'checked_in', found 'reserved'"
+        "FAIL: reservation 6 status: mismatch"
       ],
       "stderr_tail": [],
       "seconds": 0.2
@@ -20,18 +20,18 @@
     "hardcode": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: reservation 7 status: expected 'checked_in', found 'reserved'"
+        "FAIL: reservation 6 status: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 1.2
+      "seconds": 0.3
     },
     "gold": {
       "exit": 0,
       "stdout_tail": [
-        "gold done in 3 API calls"
+        "gold done in 25 API calls"
       ],
       "stderr_tail": [],
-      "seconds": 0.9
+      "seconds": 3.1
     },
     "verify_after_gold": {
       "exit": 0,
@@ -39,7 +39,7 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 0.2
+      "seconds": 5.5
     },
     "verify_idempotent": {
       "exit": 0,
@@ -47,17 +47,34 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 0.2
+      "seconds": 0.4
+    },
+    "gold_alt": {
+      "exit": 0,
+      "stdout_tail": [
+        "gold_alt done in 20 API calls"
+      ],
+      "stderr_tail": [],
+      "seconds": 3.9
+    },
+    "verify_after_gold_alt": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 6.0
     }
   },
-  "reset_seconds": 20.9,
-  "nonce": "EP-A9366F5E",
+  "reset_seconds": 40.3,
+  "nonce": "EP-31B32DB1",
   "verdicts": {
     "noop_fail": true,
     "random_fail": true,
     "hardcode_fail": true,
     "gold_pass": true,
-    "idempotent_pass": true
+    "idempotent_pass": true,
+    "gold_alt_pass": true
   },
   "pass": true
 }

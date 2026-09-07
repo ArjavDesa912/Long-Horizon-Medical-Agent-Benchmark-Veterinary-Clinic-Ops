@@ -1,19 +1,21 @@
 {
   "task_id": "026_invoice_number_gap_audit",
   "name": "veterinary_clinic_system_026_invoice_number_gap_audit",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation"],
   "surface": "backend",
-  "instruction": "Invoice numbers should be a gap-free sequence INV-1001..INV-1026. Verify and report: create one ops_reports row {report: 'invoice_sequence', batch_code, min_num: <smallest numeric suffix>, max_num: <largest>, count: <invoice rows>, missing: <comma-joined ascending list of missing numbers in that range, or ''>, sequence_ok: <true iff count == max-min+1 and there are no gaps>}.",
+  "instruction": "Run the month-end document control audit for the billing ledgers. The practice issues invoices with numbers like 'INV-<number>' and estimates with numbers like 'EST-<number>'. Push one ops_reports row with report='document_control' and the live batch_code. For each ledger (billing_invoices and billing_estimates), compute from the live rows: min_num (smallest numeric suffix), max_num (largest numeric suffix), count (total rows in the ledger, regardless of status), missing (comma-joined ascending list of numeric suffixes in the [min, max] range that are not present, or '' if none), and sequence_ok (true iff count == max-min+1 and missing is ''). Also include invoice_distinct_owners, invoice_distinct_patients, estimate_distinct_owners, and estimate_distinct_patients (the counts of unique owner_id and patient_id values in each ledger). Include cross_collisions: a list of numeric suffixes that appear in both ledgers after stripping the prefix (there should be none, but the audit must check). Include location_breakdown: a dict keyed by location name, each value a dict {'invoices': int, 'estimates': int} with the counts of rows from each ledger at that location. Do not create, modify, or delete any billing_invoices or billing_estimates row; the only write is the ops_reports row. If a document_control row for this batch already exists, overwrite it so the result is idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live invoice_numbers (parse digits after INV-). Assert exact field values (missing '' and sequence_ok true for pristine seed; count 26). Single row.",
+    "summary": "The agent produces exactly one ops_reports 'document_control' row for this batch. It contains the live-derived invoice and estimate sequence metadata (min/max/count/missing/sequence_ok), distinct owner/patient counts per ledger, cross-ledger numeric collisions, and a location breakdown by name. Every aggregate (counts, distinct counts, cross-collision count, location counts) is computed two independent ways (raw-row Python and SQL) and must agree with the agent's written row. All collections outside the blast radius are byte-identical to the seed snapshot.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +32,49 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live invoice_numbers (parse digits after INV-). Assert exact field values (missing '' and sequence_ok true for pristine seed; count 26). Single row."
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one 'document_control' row for this batch with all required fields matching the live-derived values"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "Invoice count, distinct owner/patient counts, and location counts agree between raw-row Python and SQL"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_estimates",
+        "expect": "Estimate count, distinct owner/patient counts, and location counts agree between raw-row Python and SQL"
       }
     ]
   },
+  "hazards": [
+    "The 'id' field on billing rows is not the document number: invoice ids are 1..260 and estimate ids are 1..100, while the document numbers are INV-1001..INV-1260 and EST-3001..EST-3100. A solution that uses the row id instead of parsing invoice_number/estimate_number will report the wrong min/max/count and a bogus missing list.",
+    "The ledgers contain rows of every status (invoices: paid, sent, draft; estimates: sent, draft, accepted, declined). The count must include all rows, not only 'active' ones. Excluding draft or other statuses changes the count and makes the sequence_ok field wrong.",
+    "The invoice numeric suffix range (1001..1260) and estimate numeric suffix range (3001..3100) do not overlap, so cross_collisions should be an empty list. A solution that compares numbers without the prefix or that hardcodes an empty list without checking will fail the cross-check if reseeded data ever has a real collision.",
+    "location_id is a foreign key to locations. The location_breakdown must use the live locations.name, not the raw location_id. The snapshot has 3 locations: Main Street Animal Hospital, Riverside Veterinary Clinic, and Cedar Park Animal Care Center.",
+    "Distinct owner and patient counts must be derived from live rows, not hardcoded. Invoices have 220 distinct owners and 260 distinct patients; estimates have 100 distinct owners and 100 distinct patients."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "query": "veterinary invoice number sequence gap audit document control",
         "top_results": [
-          "Account for receivables with a written policy - dvm360",
-          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
-          "Effective credit & collection techniques - dvm360"
+          "Veterinary Controlled-Substance Log from Wholesaler Invoices",
+          "How to Audit Your Veterinary Medical Records for Missed Charges",
+          "Document Number Audit Report"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Sequence-integrity reporting (gap detection) \u2014 agents typically count rows and skip the actual gap math."
+    "uniqueness_searches": [
+      {
+        "query": "invoice estimate number sequence gap audit cross ledger collision report benchmark",
+        "top_results": [
+          "Document Number Audit Report",
+          "SAP Program RFBNUM00N - Gaps in Document Number Assignment",
+          "Invoice Numbering System: Formats and Best Practices"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgrades a single-ledger gap check into a cross-ledger document-control audit with distinct-owner/patient joins, location breakdown, and prefix-aware collision detection, all verified by dual Python/SQL paths."
   }
 }

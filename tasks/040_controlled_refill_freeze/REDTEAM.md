@@ -1,17 +1,22 @@
-# 040_controlled_refill_freeze — REDTEAM notes
+# 040_controlled_refill_freeze — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Policy freeze: no controlled-substance prescription may carry refills once it has been active over 90 days (consistent with DEA caution around schedule III–V refills — verify if unsure). For every medication row with is_controlled_substance true, active true, and prescribed_at more than 90 days before the episode date: set refills_remaining to 0 and add field refill_frozen='<batch_code>'. Log one audit_log row per affected prescription: {actor: 'system', actor_role: 'system', action: 'REFILL_FREEZE', target_collection: 'medications', target_id: <medication id as string>, details: 'Refills frozen for <drug_name> (<batch_code>)', occurred_at: episode timestamp}. Younger or inactive prescriptions are untouched.
+Run the controlled-substance refill freeze and compliance summary. For every active controlled medication with refills remaining and prescribed more than 90 days before the episode date, freeze refills, tag with the batch code, log an audit row, and produce a per-drug `ops_reports` summary (one row per controlled drug name plus an ALL rollup).
 
 ## Why this is hard / unique
-Age-in-days threshold on a timestamp field + paired audit entries; domain-knowledge framing with a data-derived target set.
+- The target rule is implicit in DEA policy (age + controlled + active + refills > 0) and must be derived from live data, not stated as a list of IDs.
+- Multiple red-herring classes sit near the boundary: null `dea_schedule` on a controlled row, refills already at 0, recent prescriptions with refills, and non-controlled medications.
+- The episode date jitters, so the 90-day cutoff is live and not hardcoded.
+- Every aggregate in `ops_reports` is verified by two independent derivations (Python filter and SQL `GROUP BY`) and must agree.
+- Idempotency: rerun must not duplicate audit rows or summary rows.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- `medications` id=2 (Alprazolam, is_controlled_substance=true, dea_schedule=null, prescribed_at 2026-05-07, refills=1) proves the correct filter is `is_controlled_substance`, not `dea_schedule`.
+- `medications` id=18, 50, 58 (controlled, active, refills=0, prescribed_at before the 90-day cutoff) are decoys that satisfy age and controlled flags but must not be frozen.
+- `medications` id=46, 62, 166, 174 (controlled, active, refills=1, prescribed_at in July/August 2026) are decoys that have refills but are too recent.
+- Non-controlled active medications (e.g., Carprofen, Gabapentin, ~150 rows) must remain untouched.
+- Inactive medications (28 rows) must remain untouched.
+- The cutoff is right at the edge of the July-dated controlled rows (id=38 Tramadol 2026-07-05, refills=0), so a hardcoded or off-by-one cutoff will misclassify.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

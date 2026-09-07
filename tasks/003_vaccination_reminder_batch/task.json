@@ -1,60 +1,67 @@
 {
   "task_id": "003_vaccination_reminder_batch",
   "name": "veterinary_clinic_system_003_vaccination_reminder_batch",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "workflow",
-  "surface": "frontend",
-  "instruction": "Do exactly what the 'Send Reminder' button on the Patients \u2192 Vaccinations screen is for: enqueue one reminder_queue entry for every patient whose latest-due vaccination of any type is overdue as of the episode date in ops_meta. Each new row must have kind='vaccination_due', the patient_id, due_date set to that patient's most-overdue due_date, status='queued', queued_by='admin@pawsclinic.com', queued_at set to the episode timestamp (any time on the episode date), and a message of the form '<PatientName> is overdue for <vaccine_type> \u2014 call to book a nurse visit.' Use each patient's earliest (oldest) overdue due_date when several vaccines are overdue. Do not modify or delete the four seeded reminder_queue rows, and do not create duplicates for patients who already have a queued vaccination_due reminder.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "aggregation", "reconciliation"],
+  "surface": "backend",
+  "instruction": "Run the overdue-vaccination reminder batch for the episode. The reminder queue is not authoritative for who is overdue — some overdue patients have no queued reminder, and the queue also holds non-vaccination kinds you must leave untouched. For every patient whose earliest overdue vaccination (due_date strictly before the episode date) is not already covered by a queued vaccination_due reminder, push one new reminder_queue row with kind='vaccination_due', status='queued', queued_by='admin@pawsclinic.com', due_date equal to that earliest overdue due, message '<PatientName> is overdue for <vaccine_type> — call to book a nurse visit.', and vaccine_type set on the row. If a patient has multiple overdue vaccines, pick the one with the earliest due_date; break ties by the alphabetically first vaccine_type. For each newly queued patient, push one outbound email communications row to the owner with patient_id set: subject='Vaccination reminder <batch_code>', body='<PatientName> is overdue for <vaccine_type> as of <episode date YYYY-MM-DD>.', logged_by='system', occurred_at=episode. Then write the batch report: one ops_reports row per vaccine_type with report='vaccination_reminder_batch', batch_code, and reminder_count; plus an 'ALL' rollup. Finally append one audit_log entry with action='VACCINATION_REMINDER_BATCH', actor='system', actor_role='system', target_collection='reminder_queue', target_id=<batch_code>, details summarizing the counts, and occurred_at=episode. Leave all seeded reminder_queue, communications, and audit_log rows untouched.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session (anti-brute-force); this session cannot run against a container",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session; placeholder only",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_reminder_queue"
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Compute expected patient set: patients with any vaccination due<episode_date, minus patients with a PRE-EXISTING queued vaccination_due reminder (from snapshot: patient_ids 2 and 5 have queued vaccination_due rows). For each expected patient: exactly one NEW row exists with correct kind/status/queued_by, due_date==min overdue due, message=='<name> is overdue for <type> \u2014 call to book a nurse visit.' where <type> is the vaccine_type of that min-due row. Assert seeded 4 rows byte-identical to snapshot, total count == 4+len(expected), and no duplicate new rows per patient.",
+    "summary": "Expected set = patients with any vaccination due<ep, minus patients already having a queued vaccination_due reminder. For each expected patient, exactly one new reminder_queue row with the earliest overdue (due, then alphabetical vaccine_type) and one new communications row keyed by (subject, patient_id). ops_reports holds one row per vaccine_type plus an 'ALL' rollup, all counts matching a raw Python filter and an independent SQL GROUP BY. Exactly one new audit_log row for the batch. Seeded rows in touched collections unchanged; all other collections canary-intact.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Compute expected patient set: patients with any vaccination due<episode_date, minus patients with a PRE-EXISTING queued vaccination_due reminder (from snapshot: patient_ids 2 and 5 have queued vaccina"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside the declared blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_reminder_queue", "expect": "seeded 4 rows unchanged; one new row per expected patient with correct due_date, message, and vaccine_type" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_vaccinations", "expect": "per-vaccine-type reminder counts and total computed two independent ways (Python + SQL GROUP BY/COUNT) and matched to ops_reports" }
     ]
   },
+  "hazards": [
+    "existing queued vaccination_due rows for patient 2 (Pepper, canine) and patient 5 (Clementine, feline) must not be duplicated and their owners must not get a second communication.",
+    "reminder_queue decoys: id 3 is invoice_overdue (status='sent') and id 4 is boarding_checkin (status='queued'); an over-broad 'flip anything queued' or 'count all queued' solution touches these.",
+    "overdue patients span all species (canine, feline, avian, exotic, equine); a canine-only filter misses roughly half the expected set.",
+    "tie-breaking: when a patient has multiple overdue vaccines, the chosen vaccine_type is the earliest due_date then alphabetically first vaccine_type, not the first row returned by the API.",
+    "multi-pet owners: one owner may have multiple overdue pets; communications must be one per patient (keyed by patient_id), not one per owner."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "AAHA canine vaccination guidelines rabies DHPP bordetella booster interval adult dog",
+        "query": "veterinary vaccination reminder batch overdue patients earliest due vaccine type workflow",
         "top_results": [
-          "2022 AAHA Canine Vaccination Guidelines (aaha.org PDF)",
-          "Key Vaccination: Rabies - AAHA",
-          "2022 AAHA Core and Noncore Vaccines for Dogs (Table 2)"
+          "Patient Reminders Automatic Schedule | Merlin New UI",
+          "VetCarePress Vaccinations documentation",
+          "Pet Vaccination Schedule and Reminder System | RationalGo App Builder"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "\"is overdue for\" vaccination reminder queue veterinary clinic workflow",
+        "query": "veterinary clinic overdue vaccination reminder batch owner communication ops_reports audit log idempotent benchmark",
         "top_results": [
-          "OpenVPMS | documentation/csh/2.2/concepts",
-          "Patient Reminders Automatic Schedule | Merlin New UI"
+          "How to Automate Veterinary Vaccination Reminders in 2026 (ustechautomations.com)",
+          "Pet Vaccination Booster Reminder Automator for Vet Clinics | RationalGo",
+          "VetCarePress Vaccinations documentation"
         ]
       }
     ],
-    "differentiation_note": "Anti-duplication against seeded queue + earliest-due selection per patient mirrors the real Send Reminder pipeline; message template must match exactly, forcing instruction-following rather than guessing."
+    "differentiation_note": "Combines a reconciliation sweep against an incomplete queue with a multi-channel owner notification and a per-vaccine-type batch report, all under one episode batch code. Requires deriving the overdue set from live vaccinations, respecting existing queued rows, and producing idempotent, dual-path-verified aggregate outputs. No public benchmark fuses these four collections in a single reminder mission."
   }
 }

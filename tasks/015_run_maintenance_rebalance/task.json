@@ -1,60 +1,68 @@
 {
   "task_id": "015_run_maintenance_rebalance",
   "name": "veterinary_clinic_system_015_run_maintenance_rebalance",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "update",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["update", "workflow", "aggregation"],
   "surface": "backend",
-  "instruction": "The kennel needs a deep-clean rotation. At each location, take the lowest-numbered AVAILABLE kennel run (run_type 'kennel') and set its status to 'maintenance'. Additionally, at the location that currently has the MOST occupied runs, also set the highest-numbered available 'large_dog' run to 'maintenance' if one exists there. Do not touch occupied or cleaning runs, and make no other changes.",
+  "instruction": "Run the end-of-month kennel capacity rebalance and deep-clean rotation as of the episode date. A run is eligible for 'maintenance' only if its current status is 'available' AND it has no reservation with status 'reserved' or 'checked_in' whose stay overlaps the episode date (check_in <= episode_date <= check_out). This must be derived from live data each episode; do not assume a fixed set of runs.\n\nFor each location, select the lowest-numbered eligible run (per-location string sort on run_number) and set its status to 'maintenance' with current_patient_id cleared. Additionally, the location that currently has the most occupied runs must also put its highest-numbered eligible run into maintenance, but only if that location has at least two eligible runs and the highest is different from the lowest. If the most-occupied location has zero or one eligible run, the extra selection is skipped. Do not pull a run from another location to satisfy the extra rule.\n\nFor every selected run, push an audit_log row with action='RUN_MAINTENANCE', actor='system', actor_role='housekeeping', target_collection='boarding_runs', target_id=<run_id>, details='Deep-clean <run_number> at <location_name> assigned by batch <batch_code>', occurred_at=<episode_date with time>.\n\nCreate exactly one ops_reports row 'maintenance_rebalance' keyed by the live batch_code, with: episode_date, total_maintenance (int), by_location (dict {location_name: count}), selected_runs (list of {run_id, run_number, location_name, run_type, board_night_price, reason}), and lost_nights_7 = total_maintenance * 7. The board_night_price must come from the BOARD-NIGHT line item of that run's location fee_schedule. Overwrite any existing 'maintenance_rebalance' row for this batch. Do not modify reservations, daily logs, or any run that is not selected.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_boarding_runs"
+    "veterinary_clinic_system_boarding_runs",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot compute per location: min run_number among available kennel runs (string sort of run_number is fine \u2014 K01..K08 zero-padded) -> must be 'maintenance'. Location with most occupied runs (snapshot) -> its max-numbered available large_dog run (if any) must be 'maintenance'. All other runs unchanged. Assert exactly (3 or 4) runs changed status to maintenance.",
+    "summary": "Recompute eligible runs from live data and episode date. The set of runs with status='maintenance' must equal the selected set. Every selected run has current_patient_id cleared and all other fields unchanged; every non-selected run is byte-identical to seed. Exactly one audit_log entry per selected run with the exact action/actor/details and no extra audit_log entries for this batch. Exactly one ops_reports 'maintenance_rebalance' row for this batch with correct total, by_location, selected_runs, and lost_nights_7. Aggregate counts are recomputed two independent ways (raw-row Python filter and SQL GROUP BY/COUNT) and must agree. All collections outside the blast radius are byte-identical to seed.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot compute per location: min run_number among available kennel runs (string sort of run_number is fine \u2014 K01..K08 zero-padded) -> must be 'maintenance'. Location with most occupied runs (sn"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_boarding_runs", "expect": "Exactly the computed selected runs are status='maintenance' with current_patient_id cleared; all others unchanged" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_audit_log", "expect": "One RUN_MAINTENANCE entry per selected run, no extras" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "Exactly one maintenance_rebalance row per batch with live counts and list" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_boarding_runs", "expect": "Every aggregate total and by-location count for selected runs agrees between raw-row Python derivation and independent SQL GROUP BY/COUNT" }
     ]
   },
+  "hazards": [
+    "Reservation-locked runs: at the default episode date 2026-09-30, the snapshot shows runs K06 (reserved 65 from 2026-09-23 and reserved 6 from 2026-09-24), K07 (reserved 7 from 2026-09-12 to 2026-09-30), C10 (reserved 17 from 2026-09-23 and reserved 85 from 2026-09-20), X15 (reserved 128 from 2026-09-28), and X17 (reserved 74 from 2026-09-27) have overlapping reserved/checked_in stays and must NOT be set to maintenance. A solution that flips every 'available' run to maintenance hits these and fails the canary.",
+    "Boundary precision: the check_out on reservation 7 is exactly 2026-09-30 (the default episode date). Using a strict 'check_out < episode_date' overlap test would wrongly make K07 eligible; the interval overlap must be inclusive on both endpoints (check_in <= episode_date <= check_out). The episode date jitters ±3 days in env.py, so the set of ineligible runs shifts every episode.",
+    "Run-number sorting is per-location and string-based: the run_number prefixes are K, C, and X, so a naive global string sort would pick C09/C10 before any K run. The mission requires the lowest- and highest-numbered eligible run within each location_id.",
+    "The 'extra' run is tied to the location with the most occupied runs, which in this seed is location 1 (runs K01-K05 occupied). A red-herring solution that picks the location with large_dog runs (location 3) and sets X17 or X15 fails; X17/X15 are also ineligible due to overlapping reservations.",
+    "Idempotency on re-run: the ops_reports row must be overwritten by batch_code, audit_log entries must not be duplicated, and a second run must leave the same set of runs in 'maintenance' with the same state."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "kennel run maintenance rotation schedule veterinary boarding facility deep clean",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "RationalGo App Builder — Veterinary Boarding Kennel Cleaning Rotation Scheduler (https://rationalgo.ai/resources/app-builder/veterinary-boarding-kennel-cleaning-rotation-scheduler)",
+          "TriStar Vet — How to Maintain Clean Kennels for Optimal Hygiene in Veterinary Settings (https://tristarvet.com/dog-kennels/how-to-maintain-clean-kennels-for-optimal-hygiene-in-veterinary-settings/)",
+          "Merck Veterinary Manual — Cleaning, Disinfection, and Sanitation in Shelter Medicine (https://www.merckvetmanual.com/special-subjects/shelter-medicine/cleaning-disinfection-and-sanitation-in-shelter-medicine)"
         ]
       }
     ],
     "uniqueness_searches": [
       {
-        "query": "kennel run maintenance rebalance deep-clean rotation boarding software task",
+        "query": "veterinary boarding run maintenance rebalance eligibility reservation overlap audit task",
         "top_results": [
-          "Dog Boarding Software for UK Kennels | MyPetCare",
-          "Veterinary Boarding Kennel Cleaning Rotation Scheduler | RationalGo App Builder"
+          "Webbycrown — Manage Kennels for Pet Boarding in Odoo (https://www.webbycrown.com/guides/pet-management/kennels/)",
+          "TKO Docs — Audit to Win: Meeting New Animal Welfare Standards (https://tkodocs.com/a1-industry-specific/veterinary-clinics/audit-to-win-meeting-new-animal-welfare-standards/)",
+          "Petboost — Pet Boarding Software Australia: Kennel Management Guide (https://petboost.com.au/business/blog/petboost-for-pet-boarding-complete-guide/)"
         ]
       }
     ],
-    "differentiation_note": "Two-level conditional (per-location argmin + global argmax side rule); picking by run_number string vs numeric is the trap."
+    "differentiation_note": "Redesigned around the live 10x seed snapshot: the old v1 rule of a fixed 3-4 run change no longer holds. The v2 mission requires the agent to derive eligibility from live reservation overlaps, to handle the fact that location 1 is the only occupied location, to avoid large_dog-type red herrings, and to produce an auditable report with dual-path aggregate verification."
   }
 }

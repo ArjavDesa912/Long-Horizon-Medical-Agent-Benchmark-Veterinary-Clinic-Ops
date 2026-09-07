@@ -4,15 +4,15 @@
     "noop": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: vaccination 1 compliance_flag: expected 'current', found None"
+        "FAIL: vaccination 1 compliance_flag: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 0.9
+      "seconds": 2.5
     },
     "random": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: vaccination 1 compliance_flag: expected 'current', found None"
+        "FAIL: vaccination 1 compliance_flag: mismatch"
       ],
       "stderr_tail": [],
       "seconds": 0.2
@@ -20,16 +20,16 @@
     "hardcode": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: vaccination 1 compliance_flag: expected 'current', found None"
+        "FAIL: vaccination 1 compliance_flag: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 15.3
+      "seconds": 0.3
     },
     "gold": {
       "exit": 0,
       "stdout_tail": [],
       "stderr_tail": [],
-      "seconds": 1.7
+      "seconds": 6.6
     },
     "verify_after_gold": {
       "exit": 0,
@@ -37,7 +37,7 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 5.4
+      "seconds": 7.4
     },
     "verify_idempotent": {
       "exit": 0,
@@ -45,17 +45,32 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 0.3
+      "seconds": 0.5
+    },
+    "gold_alt": {
+      "exit": 0,
+      "stdout_tail": [],
+      "stderr_tail": [],
+      "seconds": 6.7
+    },
+    "verify_after_gold_alt": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 8.3
     }
   },
-  "reset_seconds": 16.5,
-  "nonce": "EP-8452AFF3",
+  "reset_seconds": 36.0,
+  "nonce": "EP-8F0E6C53",
   "verdicts": {
     "noop_fail": true,
     "random_fail": true,
     "hardcode_fail": true,
     "gold_pass": true,
-    "idempotent_pass": true
+    "idempotent_pass": true,
+    "gold_alt_pass": true
   },
   "pass": true
 }

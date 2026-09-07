@@ -1,19 +1,21 @@
 {
   "task_id": "088_comms_volume_by_channel",
   "name": "veterinary_clinic_system_088_comms_volume_by_channel",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "report"],
   "surface": "backend",
-  "instruction": "One ops_reports row {report: 'comms_channels', batch_code, by_channel: <JSON object channel -> count over all communications>, by_direction: <JSON object direction -> count>, total: <rows>}.",
+  "instruction": "Generate the monthly communications volume dashboard. Create one ops_reports row report='comms_volume' with the episode batch_code, total (count of all communications), by_channel (JSON channel -> count), by_direction (JSON direction -> count), by_channel_direction (nested JSON channel -> direction -> count), by_owner (JSON owner_id -> count for every owner with at least one communication, sorted by owner_id ascending), top_3_owners (array of [owner_id, count] for the three owners with the most communications, sorted descending by count then ascending by owner_id for ties), and latest_occurred_at (the latest occurred_at timestamp among all communications, as a full ISO string). Compute all values from live communications; do not hardcode counts or ids.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 7,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,7 +24,7 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live communications; exact dicts + total; nonce.",
+    "summary": "One ops_reports row report='comms_volume' with batch_code, total, by_channel, by_direction, by_channel_direction, by_owner, top_3_owners, and latest_occurred_at. Every aggregate is computed two independent ways (raw-row Python vs SQL) and must agree. by_owner must include all owners with at least one communication; top_3_owners must break ties by owner_id ascending.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +33,43 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Recompute from live communications; exact dicts + total; nonce."
+        "expect": "Exact ops_reports row with all nested JSON fields computed from live communications."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_communications",
+        "expect": "Total, channel counts, direction counts, channel-direction cross-tabs, owner counts, and max occurred_at are computed by independent SQL and raw-row filter and must agree."
       }
     ]
   },
+  "hazards": [
+    "by_channel and by_direction must be ordinary JSON objects, not nested objects or arrays; total must equal the sum of by_channel and the sum of by_direction.",
+    "by_channel_direction must be a nested JSON object with channel as the outer key and direction as the inner key; its inner sums must equal by_channel and by_direction.",
+    "by_owner must use string owner_id keys and include every owner with at least one communication; the seed has 160 communications, each owned by a different owner (ids 1-160), so by_owner has 160 keys.",
+    "top_3_owners must be an array of [owner_id, count] pairs. Because every owner has exactly one communication, the top three are [1,1], [2,1], [3,1]; tie-breaking by owner_id ascending is required.",
+    "latest_occurred_at must be the full ISO string from the data (2026-09-03T21:08:40.950+00:00 in the snapshot), not a truncated date or the episode date."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice communications volume dashboard channel direction reporting",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Veterinary Practice Communication Analytics - Vetstoria",
+          "Client Communication Metrics for Vet Clinics - VetTriage",
+          "Dashboards for Veterinary Client Engagement - Digitail"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Dual-axis count distribution in nested JSON."
+    "uniqueness_searches": [
+      {
+        "query": "communications volume by channel and direction nested JSON top owners benchmark task",
+        "top_results": [
+          "Communication Volume Dashboard Benchmark",
+          "Multi-axis Communication Aggregation Task",
+          "Owner-level Communication Volume Report"
+        ]
+      }
+    ],
+    "differentiation_note": "Produces a multi-axis nested JSON report from one collection, including channel/direction cross-tabs, owner-level counts, top-3 tie-breaking, and a latest-timestamp field. Dual-path SQL vs raw-row verification is required, and the top-3 tie-breaker and full-ISO timestamp are subtle."
   }
 }

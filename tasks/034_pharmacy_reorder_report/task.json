@@ -1,28 +1,31 @@
 {
   "task_id": "034_pharmacy_reorder_report",
   "name": "veterinary_clinic_system_034_pharmacy_reorder_report",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation", "report"],
   "surface": "backend",
-  "instruction": "Purchasing wants the reorder list. Create one ops_reports row per pharmacy inventory item whose quantity_on_hand is at or below its reorder_level: {report: 'reorder_list', batch_code, item_name, location_id, quantity_on_hand, reorder_level, suggested_order: <reorder_level*2 - quantity_on_hand>}. Any order; exactly the qualifying items, no others.",
+  "instruction": "Run the weekly pharmacy reorder and controlled-substance review. For each pharmacy_inventory row whose quantity_on_hand is at or below reorder_level, push one ops_reports row (report='pharmacy_reorder', batch_code) with item_name, location_id, location_name, supplier, unit_price, quantity_on_hand, reorder_level, is_controlled, dea_schedule, suggested_order (max(0, reorder_level*2 - quantity_on_hand), as an integer), projected_cost (suggested_order * unit_price, dollars), active_prescription_count (number of medications where active=true and drug_name equals item_name), and, for controlled items only, log_balance (the per-location controlled_substance_log running balance for the same item and location) and discrepancy (log_balance - quantity_on_hand). For non-controlled items, log_balance and discrepancy are null. Also push one ops_reports summary row (report='pharmacy_reorder_summary', batch_code) with total_lines, total_projected_cost, controlled_lines, and controlled_discrepancies. Append one audit_log row (action='PHARMACY_REORDER', actor='system', actor_role='system', target_collection='ops_reports', target_id=batch_code, details containing the batch code, total_lines, total_projected_cost, controlled_lines, and controlled_discrepancies, occurred_at=episode timestamp). If report or audit rows for this batch already exist, overwrite them.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 25,
-  "par_steps": 7,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Recompute qualifying items from live inventory (qty <= reorder). Assert one row per qualifying (item, location) with exact ints; count exact; nonce correct.",
+    "summary": "One ops_reports row per qualifying (item, location) with correct suggested_order, projected_cost, active_prescription_count, and controlled-substance log_balance/discrepancy for controlled items. One summary row with correct totals. One audit_log row. Dual-path verification (Python filter and SQL) for all aggregates. pharmacy_inventory and controlled_substance_log are not modified.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +33,51 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute qualifying items from live inventory (qty <= reorder). Assert one row per qualifying (item, location) with exact ints; count exact; nonce correct."
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "pharmacy_reorder rows for every qualifying item/location and one pharmacy_reorder_summary row with correct aggregates"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_audit_log",
+        "expect": "Exactly one PHARMACY_REORDER row for this batch"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_pharmacy_inventory",
+        "expect": "qualifying row count, suggested_order sum, total_projected_cost, and controlled log_balance/discrepancy agree between raw-row Python and SQL"
       }
     ]
   },
+  "hazards": [
+    "Duplicate-key hazard: multiple items appear in pharmacy_inventory at more than one location (e.g., Bordetella vaccine at locations 1 and 2). The report key must be (item_name, location_id), not item_name alone, or rows are lost or merged.",
+    "At-or-below boundary: the report must include rows where quantity_on_hand == reorder_level (Convenia at both locations has qty=4, reorder=4), not only strictly below. The suggested_order for those rows is 4.",
+    "Suggested-order floor: if quantity_on_hand is exactly reorder_level, suggested_order = reorder_level*2 - quantity_on_hand = reorder_level. A solution using max(0, reorder_level - quantity_on_hand) or reorder_level - quantity_on_hand gives 0 and fails.",
+    "Controlled-substance reconciliation: only qualifying items where is_controlled is true get log_balance and discrepancy. In the seed snapshot only Ketamine qualifies and is controlled; all other qualifying items are non-controlled and must have null log_balance and discrepancy.",
+    "Active-prescription count: must match medications where active=true and drug_name equals item_name, not a substring or all medications. For Ketamine there are 9 active prescriptions; for Bordetella, Convenia, and Microchip scanner battery there are none.",
+    "Controlled log per-location: Ketamine log balance differs by location (location 1: -2.9, location 2: -5.0). A solution that sums across locations gives the wrong discrepancy.",
+    "Projected-cost precision: must be dollars as a float; the verifier compares in integer cents using banker's rounding."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "query": "veterinary pharmacy inventory reorder report suggested order quantity controlled substance task",
         "top_results": [
-          "DEA compliance - AAHA",
-          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
-          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+          "Veterinary Inventory Management Software | Bittsi Veterinary Software (https://bittsi.com/solutions/inventory-management)",
+          "Veterinary Inventory & Supply Chain Management (https://staffingly.com/veterinary/services/veterinary-inventory-supply-chain/)",
+          "Veterinary Pharmacy Stock Backend Template | Controlled Substance Logs & Reorder Alerts | Back4app (https://www.back4app.com/templates/vet-pharmacy-app)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "At-or-below boundary (<=) and a computed order quantity; off-by-one on the boundary is the classic miss."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary pharmacy reorder report projected cost controlled substance discrepancy multi-location task",
+        "top_results": [
+          "DEA Controlled-Substance Logs and Inventory Reconciliation: Biennial Counts, Discrepancy Investigations, Audit Readiness (https://veterinarybusinessguide.com/dea-controlled-substance-logs-and-inventory-reconciliation/)",
+          "Automate Vet Inventory Reorder Alerts: 5-Step Workflow 2026 (https://ustechautomations.com/resources/blog/automate-veterinary-inventory-reorder-alerts-2026)",
+          "Veterinary Pharmacy Management Software | RaftLabs (https://www.raftlabs.com/industries/veterinary/pharmacy-management)"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines a low-stock reorder report with per-location controlled-substance reconciliation, active-prescription counts, and projected-cost aggregation. Tests exact <= boundary, multi-location duplicate keys, controlled-vs-non-controlled null handling, and dual-path SQL vs. Python verification in a single purchasing workflow."
   }
 }

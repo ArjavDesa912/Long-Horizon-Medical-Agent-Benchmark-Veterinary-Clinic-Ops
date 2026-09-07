@@ -1,28 +1,28 @@
 {
   "task_id": "072_fee_schedule_parity_check",
   "name": "veterinary_clinic_system_072_fee_schedule_parity_check",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation", "pricing"],
   "surface": "backend",
-  "instruction": "Corporate wants to know if pricing is uniform. Compare the three locations' fee schedules item-by-item (match on code). Create one ops_reports row {report: 'fee_parity', batch_code, uniform: <true iff every code has identical price across all locations>, divergent_codes: <comma-joined sorted codes whose prices differ, or ''>, checked_codes: <count of distinct codes compared>}.",
+  "instruction": "Corporate is auditing pricing integrity across the three locations. Produce the fee parity check and a paid-invoice adherence audit in ops_reports for this batch. Create one ops_reports row with report='fee_parity': {batch_code, uniform, divergent_codes, checked_codes}. uniform is true iff every fee schedule code has the identical price across all three locations; divergent_codes is a comma-joined sorted list of codes whose price differs at any location (empty string if none); checked_codes is the count of distinct fee schedule codes examined. Then create one ops_reports row per fee schedule code with report='fee_adherence': {batch_code, fee_code, description, fee_price, billed_line_count, billed_quantity, avg_unit_price, total_billed_amount, overbill_amount, underbill_amount}. Match invoice line items to fee schedule codes by exact description (the canonical service names in the fee schedule); for each paid invoice line item whose description exactly matches a fee schedule description, compare unit_price to the fee_price for that code. billed_line_count = number of matching paid line items; billed_quantity = sum of quantity; total_billed_amount = sum of unit_price*quantity; avg_unit_price = total_billed_amount / billed_quantity (0.0 if no quantity); overbill_amount = sum of (unit_price - fee_price)*quantity for matching lines that are above fee_price; underbill_amount = sum of (fee_price - unit_price)*quantity for matching lines below fee_price. Include all fee schedule codes even if they have zero matching paid line items (billed_line_count=0, avg_unit_price=0, overbill_amount=0, underbill_amount=0). Finally create one ops_reports row with report='fee_adherence_summary': {batch_code, matched_line_count, variance_line_count, total_overbill_amount, total_underbill_amount, net_variance_amount} where matched_line_count is the total number of paid line items that exactly match a fee schedule description, variance_line_count is the number of those lines whose unit_price differs from fee_price, total_overbill_amount and total_underbill_amount are the sum of positive/negative variances, and net_variance_amount = total_overbill_amount - total_underbill_amount. Do not use billing_estimates or draft/sent invoices for the adherence audit. No collection outside ops_reports may be modified.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
+  "_max_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
-  "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
-  ],
+  "blast_radius": ["veterinary_clinic_system_ops_reports"],
   "success_criteria": {
-    "summary": "Recompute from live fee_schedules items arrays; exact fields; nonce.",
+    "summary": "Recompute fee schedule parity across locations and paid-invoice fee adherence per code. Exactly one fee_parity row, one fee_adherence row per fee schedule code (6 total), and one fee_adherence_summary row. Every numeric aggregate verified by both a raw-row Python pass and an independent SQL pass; all monetary values cents-exact.",
     "checks": [
       {
         "type": "canary_hash",
@@ -31,22 +31,43 @@
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Recompute from live fee_schedules items arrays; exact fields; nonce."
+        "expect": "see summary above"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "matched_line_count, variance_line_count, over/underbill amounts, and per-code billed metrics computed by raw-row filter and SQL agree with each other and the written rows"
       }
     ]
   },
+  "hazards": [
+    "All three fee_schedules rows have identical items (codes WELL-EXAM, SICK-EXAM, DENTAL-PROPHY, VACC-RABIES, CBC-CHEM, BOARD-NIGHT at identical prices), so a naive comparison of row ids or names instead of the nested items array will falsely report uniformity without actually comparing prices.",
+    "The invoice ledger contains non-fee-schedule descriptions that look like fee items but are not exact matches: 'Vaccination – rabies' (80 line items), 'Boarding (3 nights)' (77), 'Ear cytology' (77), 'Nail trim' (76). Fuzzy-matching these to fee schedule codes (e.g. 'rabies' to VACC-RABIES) produces wrong billed counts and averages.",
+    "Fee codes SICK-EXAM, VACC-RABIES, and BOARD-NIGHT have zero exact-description matches on paid invoices; they must still appear in fee_adherence with billed_line_count=0.",
+    "Paid exact-match line counts are 87 (Wellness examination), 77 (Dental prophylaxis), and 58 (CBC + chemistry panel) — only paid invoices count; sent/draft invoices must be excluded.",
+    "The adherence variance is real: WELL-EXAM is overbilled on average (avg 218.24 vs fee 62.00), DENTAL-PROPHY underbilled (avg 229.90 vs fee 385.00), CBC-CHEM overbilled (avg 216.17 vs fee 148.00). Summing all line items without matching on exact description or including non-paid invoices gives a different total."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary fee schedule parity audit invoice pricing variance",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "UC Davis VMTH billing audit — audit.ucop.edu",
+          "How to Audit Your Veterinary Medical Records for Missed Charges — NovaVet",
+          "How can veterinary practices prepare for the CMA's proposed reforms? — Price Bailey"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Nested-array structural comparison across rows; agents compare row ids instead of item codes."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary fee schedule variance audit invoice line item benchmark task",
+        "top_results": [
+          "What Veterinary Invoice Verification Process Should New Pet Insurance MGAs Implement — Insurnest",
+          "How to Audit Your Veterinary Medical Records for Missed Charges — NovaVet",
+          "Invoicing for Veterinarians: Billing for Procedures, Medications, and Wellness Plans — KipBill"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines cross-location fee schedule parity with a paid-invoice line-item adherence audit, requiring exact description matching against the nested fee schedule items array and dual-path verification of the monetary aggregates."
   }
 }

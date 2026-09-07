@@ -1,19 +1,21 @@
 {
   "task_id": "023_late_fee_assessment",
   "name": "veterinary_clinic_system_023_late_fee_assessment",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "workflow",
-  "surface": "websearch",
-  "instruction": "Finance is assessing late fees. The percentage for THIS episode is stored in veterinary_clinic_system_ops_meta.late_fee_pct (an integer percent). For every invoice with status 'overdue' (after you apply the re-flagging rule: 'sent' with due_date strictly before the episode date becomes 'overdue') and unpaid balance, add a late fee: append a line item {description: 'Late fee (<pct>% of overdue balance)', quantity: 1, unit_price: <round(pct% * unpaid, 2)>} to that invoice, increase total_amount by the same amount, and increase the owner's balance by the same amount. Apply each invoice's fee once. Paid and draft invoices are never touched.",
+  "category": ["update", "workflow", "aggregation"],
+  "surface": "backend",
+  "instruction": "Finance is assessing monthly late fees. The percentage for THIS episode is stored in veterinary_clinic_system_ops_meta.late_fee_pct (an integer percent, 3-9). For every invoice with status 'overdue' OR status 'sent' with due_date strictly before the episode date, and with unpaid balance (total_amount - amount_paid) > 0: (1) If the invoice is still 'sent', re-flag it 'overdue'. (2) Compute the late fee as round(unpaid * late_fee_pct / 100, 2) dollars, using standard half-up rounding to cents. (3) Append one line item to the invoice: {description: 'Late fee (<pct>% of overdue balance)', quantity: 1, unit_price: <fee>}. (4) Increase total_amount by the fee. (5) Increase the owner's balance by the fee, aggregated by owner. (6) Push one outbound email communications row to the owner: channel='email', direction='outbound', subject='Late fee applied <batch_code>', body='<OwnerFullName>, a <pct>% late fee of $<fee with 2 decimals> has been added to invoice <invoice_number> for <PatientName>. Please pay the new balance of $<new_total with 2 decimals>.', logged_by='system', occurred_at the episode timestamp, owner_id and patient_id set. (7) Append one audit_log row per invoice: action='LATE_FEE_APPLIED', actor='system', actor_role='system', target_collection='billing_invoices', target_id=<invoice id as string>, details='Late fee <pct>% applied to invoice <number>; fee $<fee>, new total $<new_total>', occurred_at the episode timestamp. (8) Push one ops_reports row: report='late_fee_summary', batch_code, late_fee_pct, invoice_count, total_unpaid_before (dollars), total_fees (dollars), total_new_balance (dollars), owners_affected, location_breakdown (dict keyed by location_id with {invoice_count, fee_total}). Paid and draft invoices are never touched. The solution must be idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 14,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code",
@@ -26,34 +28,59 @@
   },
   "blast_radius": [
     "veterinary_clinic_system_billing_invoices",
-    "veterinary_clinic_system_owners"
+    "veterinary_clinic_system_owners",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Read late_fee_pct from ops_meta. Compute expected overdue set (sent with due<ep plus already-overdue) from snapshot. For each: assert status 'overdue', line_items == snapshot items + 1 with exact fee (cents), total == snapshot total + fee, and owner.balance == snapshot balance + sum of that owner's fees. Assert all other invoices/owners byte-identical.",
+    "summary": "Read late_fee_pct from ops_meta. Target = overdue or sent-with-due<ep invoices with unpaid>0. For each: status='overdue'; line_items == original items + exact late-fee item; total_amount == seed total + fee; owner.balance == seed balance + per-owner fee sum. One outbound communication per target keyed by (subject, owner_id, body); one audit per target keyed by (action, target_collection, target_id, details); one ops_reports 'late_fee_summary' with correct aggregates. All non-target invoices and other collections byte-identical. Counts, total unpaid, total fees, and per-owner fees computed two ways (Python and SQL) and must agree.",
     "checks": [
       {
         "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
+        "collections": "all seeded collections outside the declared blast_radius"
       },
       {
         "type": "derived_rows",
         "collection": "(see verifier.py)",
-        "expect": "Read late_fee_pct from ops_meta. Compute expected overdue set (sent with due<ep plus already-overdue) from snapshot. For each: assert status 'overdue', line_items == snapshot items + 1 with exact fee "
+        "expect": "Target invoices re-flagged, late-fee line items appended, totals and owner balances increased, communication/audit/ops rows match, idempotent on re-run."
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "Target count, total unpaid, total fees, and per-owner fees agree between a raw-row Python filter and an independent SQL aggregate query."
       }
     ]
   },
+  "hazards": [
+    "Per-episode randomized late_fee_pct (3-9) from ops_meta: the fee amount and the late-fee line-item description both contain the pct, so a hardcoded percentage fails every reset.",
+    "Sent vs already-overdue: at seed there are no 'overdue' invoices, but the rule must handle both. The two sent past-due invoices are id 1 (INV-1001, unpaid $523) and id 2 (INV-1002, unpaid $214); a solution that only looks for status='overdue' does nothing.",
+    "Draft and paid decoys: billing_invoices id 3 (draft, due 2026-09-23) and the 257 paid invoices must remain byte-identical.",
+    "Line-item append, not replace: the existing line_items must survive unchanged and the late-fee item must be the last entry. The invoice total must increase by exactly the fee, and the owner's balance must increase by the per-owner fee sum.",
+    "Half-up cent rounding: with pct 3 on $523, the fee is $15.69; with pct 5 it is $26.15; with pct 9 it is $47.07. The verifier uses Decimal half-up rounding to cents and compares exact cents.",
+    "Idempotency: a second run must not append a second late-fee line item, double the owner balance, or duplicate communications/audit/ops rows for the same batch."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "query": "veterinary invoice late fee policy percentage assessment accounts receivable 2026",
         "top_results": [
-          "Account for receivables with a written policy - dvm360",
+          "Effective credit & collection techniques - dvm360",
           "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
-          "Effective credit & collection techniques - dvm360"
+          "Account for receivables with a written policy - dvm360"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Per-episode randomized fee percentage (memorized constants fail), nested line-item append (not replace), and fan-out to owner balances."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary billing late fee line item append owner balance communication audit task",
+        "top_results": [
+          "Veterinary Practice Late Fee Automation",
+          "Automated AR Late Fee Assessment in Vet Software",
+          "Invoice Line-Item Late Fee and Owner Balance Benchmark"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses a per-episode randomized percentage, nested line-item append, owner-balance fan-out, owner notification, audit trail, and summary reporting into one idempotent financial workflow. Dual-path verification on counts, unpaid, fees, and per-owner fee sums."
   }
 }

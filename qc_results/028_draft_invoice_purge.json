@@ -4,15 +4,15 @@
     "noop": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: invoice count: expected 25, found 26"
+        "FAIL: live invoice count: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 1.0
+      "seconds": 2.9
     },
     "random": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: invoice count: expected 25, found 26"
+        "FAIL: live invoice count: mismatch"
       ],
       "stderr_tail": [],
       "seconds": 0.2
@@ -20,16 +20,18 @@
     "hardcode": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: invoice count: expected 25, found 26"
+        "FAIL: live invoice count: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 15.3
+      "seconds": 0.2
     },
     "gold": {
       "exit": 0,
-      "stdout_tail": [],
+      "stdout_tail": [
+        "gold done in 71 API calls"
+      ],
       "stderr_tail": [],
-      "seconds": 0.8
+      "seconds": 2.2
     },
     "verify_after_gold": {
       "exit": 0,
@@ -37,7 +39,7 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 3.6
+      "seconds": 9.7
     },
     "verify_idempotent": {
       "exit": 0,
@@ -45,17 +47,34 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 0.3
+      "seconds": 0.5
+    },
+    "gold_alt": {
+      "exit": 0,
+      "stdout_tail": [
+        "gold_alt done in 71 API calls"
+      ],
+      "stderr_tail": [],
+      "seconds": 2.9
+    },
+    "verify_after_gold_alt": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 9.9
     }
   },
-  "reset_seconds": 18.8,
-  "nonce": "EP-0D86A4DF",
+  "reset_seconds": 41.4,
+  "nonce": "EP-0913F5DD",
   "verdicts": {
     "noop_fail": true,
     "random_fail": true,
     "hardcode_fail": true,
     "gold_pass": true,
-    "idempotent_pass": true
+    "idempotent_pass": true,
+    "gold_alt_pass": true
   },
   "pass": true
 }

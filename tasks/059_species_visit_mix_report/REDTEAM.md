@@ -1,17 +1,21 @@
-# 059_species_visit_mix_report — REDTEAM notes
+# 059_species_visit_mix_report — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Produce the data behind the Visits by Species report. One ops_reports row per species that appears among patients with at least one visit: {report: 'visits_by_species', batch_code, species, visits: <count of visit_records whose patient has that species>, distinct_patients: <distinct patients of that species with visits>, pct_of_visits: <round(100*visits/total_visits,1)>}. Any order.
+Produce the Visits by Species report for this episode. Write a species rollup with visits, distinct patients, pct_of_visits, and pct_of_patients, plus a species-by-location matrix. All counts must be derived from a live join of `visit_records` and `patients`.
 
 ## Why this is hard / unique
-Join-driven aggregation mirroring the app's report screen; species with zero visits must be absent (not zero-rows).
+- Two-level aggregation (species and species+location) from a join.
+- `pct_of_patients` uses the full `patients` table (300) as the denominator, not just patients with visits.
+- Multiple visits per patient must be counted as visits.
+- Zero-visit species must be absent, not written as zero rows.
+- Dual-path verification (Python join vs SQL GROUP BY).
+- Delete-then-rewrite idempotency per batch.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- `pct_of_patients` denominator is 300 (all `patients` rows), not 202 (the sum of distinct patients with visits: avian 18 + canine 99 + equine 10 + exotic 12 + feline 63 = 202).
+- Patient 216 has two `visit_records` (id=10 and id=12); both are canine and must each count as a visit.
+- `visit_records` id=371 is unlocked and incomplete but is still a canine visit (patient 5) and must count.
+- Only five species appear in visits; rows for any other species must be absent.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

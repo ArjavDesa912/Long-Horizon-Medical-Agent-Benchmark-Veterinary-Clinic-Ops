@@ -4,15 +4,15 @@
     "noop": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: patient count: expected 31, found 30"
+        "FAIL: patient count: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 0.7
+      "seconds": 4.9
     },
     "random": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: patient count: expected 31, found 30"
+        "FAIL: patient count: mismatch"
       ],
       "stderr_tail": [],
       "seconds": 0.2
@@ -20,16 +20,18 @@
     "hardcode": {
       "exit": 1,
       "stdout_tail": [
-        "FAIL: patient count: expected 31, found 30"
+        "FAIL: patient count: mismatch"
       ],
       "stderr_tail": [],
-      "seconds": 15.3
+      "seconds": 0.2
     },
     "gold": {
       "exit": 0,
-      "stdout_tail": [],
+      "stdout_tail": [
+        "gold done in 15 API calls"
+      ],
       "stderr_tail": [],
-      "seconds": 1.2
+      "seconds": 8.3
     },
     "verify_after_gold": {
       "exit": 0,
@@ -37,7 +39,7 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 4.0
+      "seconds": 6.9
     },
     "verify_idempotent": {
       "exit": 0,
@@ -45,17 +47,34 @@
         "PASS"
       ],
       "stderr_tail": [],
-      "seconds": 0.5
+      "seconds": 0.4
+    },
+    "gold_alt": {
+      "exit": 0,
+      "stdout_tail": [
+        "gold_alt done in 15 API calls"
+      ],
+      "stderr_tail": [],
+      "seconds": 7.6
+    },
+    "verify_after_gold_alt": {
+      "exit": 0,
+      "stdout_tail": [
+        "PASS"
+      ],
+      "stderr_tail": [],
+      "seconds": 6.6
     }
   },
-  "reset_seconds": 17.0,
-  "nonce": "EP-DD2F8753",
+  "reset_seconds": 38.4,
+  "nonce": "EP-3A7F53B4",
   "verdicts": {
     "noop_fail": true,
     "random_fail": true,
     "hardcode_fail": true,
     "gold_pass": true,
-    "idempotent_pass": true
+    "idempotent_pass": true,
+    "gold_alt_pass": true
   },
   "pass": true
 }

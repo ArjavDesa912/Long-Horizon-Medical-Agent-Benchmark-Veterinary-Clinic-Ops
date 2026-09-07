@@ -1,52 +1,67 @@
 {
   "task_id": "017_feeding_instruction_digest",
   "name": "veterinary_clinic_system_017_feeding_instruction_digest",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "workflow"],
   "surface": "backend",
-  "instruction": "The kitchen whiteboard needs today's feeding plan. Create one ops_reports row {report: 'feeding_digest', batch_code, on_episode_date: <episode date YYYY-MM-DD>, guests: <number of checked_in reservations>, raw_diets: <how many of those reservations' feeding_instructions contain the substring 'Raw' (case-sensitive)>, med_guests: <how many have medication_instructions other than 'None'>}. Exactly one row.",
+  "instruction": "Prepare the daily kennel care roster and provisioning digest for the episode date. The roster includes two groups, both derived from live data and joined through the assigned run and patient:\n\nGroup A (in-house): every boarding_reservation with status 'checked_in' or 'overstay'.\nGroup B (active reserved): every boarding_reservation with status 'reserved' whose stay overlaps the episode date (check_in <= episode_date <= check_out).\n\nDo NOT include checked_out reservations, no-shows, or reserved stays that have not yet started.\n\nFor each rostered reservation, read the assigned boarding_runs (run_type, run_number), the patient (name, species, owner_id), and the locations (name). Compute one ops_reports row 'boarding_care_roster' keyed by the live batch_code with: episode_date, total_roster, in_house_count, active_reserved_count, raw_diets (count of reservations whose feeding_instructions contains the case-sensitive substring 'Raw'), med_guests (count of reservations whose medication_instructions is non-null and is NOT the literal string 'None'), by_run_type (dict {run_type: count}), by_location (dict {location_name: count}), species_breakdown (dict {species: count}), raw_by_location (dict {location_name: count}), med_by_location (dict {location_name: count}), and raw_diet_communications_count.\n\nFor every rostered reservation with a raw diet, push one communications row to the owner: channel='email', direction='outbound', subject='Special diet reminder <batch_code>', body='<patient_name> (reservation <reservation_id>) is on a special/raw diet — please confirm provisions with the front desk.', logged_by='system', occurred_at=<episode_date with time>, owner_id, patient_id, reservation_id. To avoid duplicates, include batch_code as an extra field on the row and skip if a communication with this subject and (patient_id, reservation_id) already exists.\n\nOverwrite any existing 'boarding_care_roster' ops_reports row for this batch. Do not modify reservations, runs, patients, or locations.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 9,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_communications"
   ],
   "success_criteria": {
-    "summary": "Recompute the three ints from live checked_in reservations; assert single row with exact values and nonce.",
+    "summary": "Roster counts and all breakdowns (by_run_type, by_location, species, raw_by_location, med_by_location) are derived two independent ways: a raw-row Python filter over the live API data and an independent SQL JOIN/GROUP BY query. The ops_reports row 'boarding_care_roster' for this batch matches both. One outbound email per raw-diet rostered reservation with the exact subject and (patient_id, reservation_id) keys. No reservations, runs, patients, or locations are modified.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute the three ints from live checked_in reservations; assert single row with exact values and nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "Exactly one boarding_care_roster row per batch with all aggregates matching the dual-path recomputation" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_communications", "expect": "One raw-diet communication per raw rostered reservation, keyed by subject/patient/reservation, no extras" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_boarding_reservations", "expect": "Every aggregate count (total, in_house, active_reserved, raw, med, by_run_type, by_location, species_breakdown, raw_by_location, med_by_location) agrees between raw-row Python and SQL JOIN/GROUP BY" }
     ]
   },
+  "hazards": [
+    "In-house vs active reserved: at the default episode date 2026-09-30 the snapshot has 5 checked_in reservations (all with check_out before the episode) and 9 active reserved reservations that overlap 2026-09-30 (ids 6, 7, 17, 65, 74, 85, 98, 99, 128). A solution that counts only one of the groups, or that treats 'reserved' as in-house without the date overlap, gets the wrong counts.",
+    "Raw-diet case sensitivity: only reservation 2 (checked_in, patient 4) and reservation 65 (reserved, patient 171) contain the case-sensitive substring 'Raw' in feeding_instructions. A lowercase search or a search that includes all reservations returns different counts.",
+    "Medication 'None' literal: reservations with medication_instructions 'None' (the string) or null must not be counted as med_guests. In the default roster, checked_in reservation 4 and reserved reservations 6, 17, 98, 99, and 128 are not med_guests.",
+    "Multi-hop joins and collisions: species comes from patients, run_type and location from the assigned run (not the reservation alone). Patient and owner names can collide, so the communications must be keyed by patient_id and reservation_id, not by owner name or body text.",
+    "Active reserved conflicts: active reserved bookings 98 and 99 overlap occupied runs 4 and 3 respectively; 74 and 128 are on large_dog runs. They are still in the roster and must not be 'fixed' or ignored.",
+    "Idempotency: the ops_reports row must be overwritten by batch_code, and the raw-diet communications must not be duplicated on a second run."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary kennel feeding instructions raw diet medication care roster",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Southborough Veterinary Hospital — Under One Woof Boarding Agreement (https://www.southboroughvet.com/files/southborough_vet/Updated-Blank-Boarding-Contract-2025.pdf)",
+          "Tails Up — Meals & Medical Concerns (https://www.tailsup.com/meals-and-medical-concerns)",
+          "West Creek Kennels — Feeding Your Dog (https://www.westcreekkennels.com/feeding-your-dog)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Substring semantics (case-sensitive 'Raw') and 'None' literal exclusion trip agents that normalize text."
+    "uniqueness_searches": [
+      {
+        "query": "boarding care roster aggregate by run_type location species raw diet communication task",
+        "top_results": [
+          "PawOps — Dog Boarding & Kennel Management Software (https://pawops.io/)",
+          "Petcare.software — Kennel Software for UK Boarding Facilities (https://petcare.software/kennel-software/)",
+          "Goodstay — Pet Boarding Software for Independent Kennels (https://goodstay.pet/)"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses the original single-row feeding digest into a multi-hop, multi-collection roster that distinguishes in-house from active-reserved guests, computes cross-collection breakdowns by run type/location/species, and sends owner communications only for raw-diet cases. Dual-path aggregation is enforced for every report number."
   }
 }

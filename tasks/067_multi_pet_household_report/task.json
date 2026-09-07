@@ -1,52 +1,66 @@
 {
   "task_id": "067_multi_pet_household_report",
   "name": "veterinary_clinic_system_067_multi_pet_household_report",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "workflow", "report"],
   "surface": "backend",
-  "instruction": "Marketing wants multi-pet households. One ops_reports row per owner with 2 or more ACTIVE patients: {report: 'multi_pet_household', batch_code, owner_id, owner_name, pet_count: <active patients>, species_mix: <comma-joined sorted distinct species of those patients>}. Any order.",
+  "instruction": "Marketing wants a multi-pet household campaign. Build the report from live data only.\n\n1. For every owner with 2 or more ACTIVE patients, push exactly one ops_reports row report='multi_pet_household', batch_code, owner_id, owner_name (full_name from owners), pet_count, species_mix (comma-joined sorted distinct species of those active pets, no duplicates), primary_location_id (most common location_id among those pets; ties broken by lowest location_id), overdue_vax_count (number of those active pets that have at least one vaccination with due_date strictly before the episode date).\n2. For every multi-pet household with overdue_vax_count > 0, push one reminder_queue row kind='multi_pet_vax_recall', status='queued', owner_id, message 'Household <owner_id> has <overdue_vax_count> pet(s) with overdue vaccinations - batch <batch_code>', queued_by='system', queued_at the episode timestamp.\n3. Push one audit_log row: action='MULTI_PET_HOUSEHOLD_REPORT', actor='system', actor_role='system', target_collection='ops_reports', target_id='batch', details='Batch <batch_code> - <N> households, <M> with overdue vax', occurred_at the episode timestamp.\n\nDo not include transferred or deceased pets. Do not create rows for owners with fewer than 2 active patients. Do not modify patients, owners, or vaccinations.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_reminder_queue",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Recompute from live patients (status 'active'); exact counts and sorted CSV; owners with 1 or 0 absent; nonce.",
+    "summary": "ops_reports contains exactly one multi_pet_household row per owner with 2+ active patients, with exact fields and counts. reminder_queue contains exactly one multi_pet_vax_recall per such household with any overdue vaccination. audit_log contains the batch entry. Patients, owners, and vaccinations are unchanged.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live patients (status 'active'); exact counts and sorted CSV; owners with 1 or 0 absent; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "one row per active multi-pet owner with correct counts and species_mix" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_patients", "expect": "multi-pet household counts and overdue counts agree between raw-row Python and SQL GROUP BY" }
     ]
   },
+  "hazards": [
+    "Owner 3 (Ingrid Larsson) has 3 patients: active feline 5 (Clementine), active avian 248 (Lucy), and transferred feline 27 (Poppy). A solution that counts transferred patients would report 3 pets and species_mix 'avian,feline' with pet_count 3; the correct row is 2 active pets (5 and 248) with species_mix 'avian,feline'.",
+    "8 multi-pet owners have two active pets with the same name (e.g. owner 2 has two 'Cooper' canines). Grouping by (owner_id, pet_name) instead of (owner_id, patient_id) would undercount pet_count or species. The report must count by owner_id and distinct patient_id.",
+    "Some multi-pet households have all pets of the same species (e.g. owner 1 has two canines), so species_mix is 'canine' with no comma. A solution that always joins a list of two species would produce wrong output.",
+    "Overdue_vax_count must come from vaccinations.due_date < episode_date, not from appointments or reminder_queue. At 2026-09-30 there are 104 overdue patients, and 56 multi-pet households contain at least one overdue pet.",
+    "220 - 88 = 132 owners have fewer than 2 active patients and must not appear in the report. A solution that emits one row per owner (or per patient) fails the count."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "multi-pet household marketing veterinary practice report species mix vaccination recall",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Streamline Vet Multi-Pet Household Marketing 2026 - US Tech Automations",
+          "Veterinary Recall: Annual Wellness & Vaccination Reminders - PostKnock",
+          "Vaccination Reminders That Book 40% More Visits - US Tech Automations"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Filtered group-by (active only) with a sorted-set CSV; including transferred patients is the trap."
+    "uniqueness_searches": [
+      {
+        "query": "multi-pet household veterinary clinic report campaign overdue vaccination benchmark",
+        "top_results": [
+          "Vaccination Reminders That Book 40% More Visits - US Tech Automations",
+          "Vaccine Visits Up 40% with Reminder Automation - US Tech Automations",
+          "Veterinary Automation: Beginner to Advanced - US Tech Automations"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses multi-pet household aggregation with a cross-collection overdue-vaccination recall, location-tie handling, idempotent per-batch rewrite, and dual-path SQL vs API verification."
   }
 }

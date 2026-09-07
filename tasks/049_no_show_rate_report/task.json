@@ -1,19 +1,20 @@
 {
   "task_id": "049_no_show_rate_report",
   "name": "veterinary_clinic_system_049_no_show_rate_report",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation"],
   "surface": "backend",
-  "instruction": "One ops_reports row {report: 'no_show_rate', batch_code, past_total: <appointments before the episode date>, past_no_shows: <of those, status 'no_show'>, no_show_pct: <round(100*past_no_shows/past_total, 1)>}.",
+  "instruction": "Produce a provider-segmented no-show analysis, batched under the episode batch code. A 'past appointment' has dp(appointment_date) < episode_date. For each provider_id who has at least one past appointment (any status), create one ops_reports row with report='no_show_analysis', batch_code, provider_id, provider_name (from providers), outcomes = count of past appointments with status in ('completed','no_show','checked_in'), no_shows = count of those with status='no_show', attended = outcomes - no_shows, no_show_pct = round(100 * no_shows / outcomes, 1) if outcomes > 0 else 0.0, stale_bookings = count of past appointments with status in ('scheduled','confirmed') (these are booked slots in the past that never resolved), and top_no_show_reason = the reason that appears most often among that provider's no_show past appointments (tie -> alphabetically first reason). Then create one ops_reports row with report='no_show_analysis_summary', batch_code, total_outcomes, total_no_shows, total_stale_bookings, overall_no_show_pct = round(100 * total_no_shows / total_outcomes, 1) if total_outcomes > 0 else 0.0, and highest_provider_id = provider_id with the highest no_show_pct (tie -> lowest numeric provider id). Delete any existing no_show_analysis / no_show_analysis_summary rows for this batch before writing.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps must be measured against a live container in the QC session; do not set final values without a real gold run.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,31 +23,43 @@
     "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Recompute from live appointments vs ep; exact ints, pct within 0.05; nonce.",
+    "summary": "One no_show_analysis row per provider with past appointments, plus one summary row, all fields derived from live appointments and provider records. Outcomes, no_shows, stale_bookings, percentages, top reason, and highest provider are verified both by raw-row Python and independent SQL. No other collections are modified.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live appointments vs ep; exact ints, pct within 0.05; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "exact per-provider metrics and summary, keyed by batch_code and report" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_appointments", "expect": "every provider metric and the summary are computed two independent ways and match" }
     ]
   },
+  "hazards": [
+    "Denominator hazard: the no-show rate denominator is 'completed + no_show + checked_in' (actual outcomes), not 'all past appointments'. Stale 'scheduled'/'confirmed' past appointments must be counted in stale_bookings but excluded from outcomes. For episode 2026-09-30, provider 3 has 79 stale scheduled/confirmed past appointments and 96 outcomes; a wrong denominator that includes stale bookings would significantly change the percentage.",
+    "Stale past booking decoys: id 74 (provider 3, scheduled, 2026-09-27, Ear infection re-check) and id 60 (provider 2, scheduled, 2026-09-27, Chronic kidney disease monitoring) are past-dated but still 'scheduled'. They must count in stale_bookings, not outcomes or no_shows.",
+    "checked_in status is an attended outcome, not a no_show and not a stale booking. Row id 4 (provider 1, checked_in, 2026-09-04, Chronic kidney disease monitoring) and id 5 (provider 1, checked_in, 2026-09-04, Ear infection re-check) are past-dated 'checked_in' and must be in outcomes (attended side).",
+    "Episode-date boundary: appointments on the episode date itself (e.g., id 545, provider 1, scheduled, 2026-09-30, Annual check) are not 'past' and must be excluded from all counts. A non-strict '<' boundary would include them.",
+    "Top-no-show-reason tie-break is alphabetical. If two reasons tie for most no-shows, choose the lexicographically smaller reason string.",
+    "Highest-provider tie-break is numeric by provider_id. If two providers have the same no_show_pct, choose the lower provider_id.",
+    "Idempotency: the agent must delete prior no_show_analysis and no_show_analysis_summary rows for this batch; otherwise reruns produce duplicate report rows."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary clinic no-show rate benchmark calculation denominator scheduled appointments",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Veterinary Practice Benchmarking Guide (veterinarybusinessguide.com)",
+          "Client Appointment No-Show Rate - KPI Definition & Benchmarks | KPI Depot (kpidepot.com)",
+          "No-Show Rates by Industry: 2026 Benchmarks | Etisia (etisia.com)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Date-partitioned rate with rounding; trivial-looking but the pct denominator choice (past-only) is the trap."
+    "uniqueness_searches": [
+      {
+        "query": "no show rate report provider segmented stale bookings veterinary benchmark task",
+        "top_results": [
+          "Pet Business Reporting & Analytics — Animal Friends OS (animalfriendsos.com)",
+          "No-Show Rate Benchmark Report | Elixir EHR (elixirehr.com)",
+          "No Show Rates Report (kdhe.ks.gov)"
+        ]
+      }
+    ],
+    "differentiation_note": "Fuses a provider-segmented no-show rate with a stale-booking reconciliation metric and a top-no-show-reason tie-break. The agent must correctly partition past statuses into 'outcomes', 'no_shows', and 'stale_bookings' rather than using a single all-past denominator, and the verifier checks every number via raw-row and SQL paths. No public benchmark packages this status-reconciliation into a provider-level report."
   }
 }

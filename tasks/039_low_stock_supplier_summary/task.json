@@ -1,52 +1,67 @@
 {
   "task_id": "039_low_stock_supplier_summary",
   "name": "veterinary_clinic_system_039_low_stock_supplier_summary",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "aggregation",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["aggregation", "reconciliation", "idempotency"],
   "surface": "backend",
-  "instruction": "Group the reorder problem by supplier for the weekly order call. One ops_reports row per supplier that has at least one item at or below reorder level: {report: 'supplier_reorder', batch_code, supplier, items_below: <count of that supplier's rows with qty <= reorder_level>, est_cost: <sum over those rows of unit_price*(reorder_level*2 - quantity_on_hand), dollars>, locations_affected: <comma-joined sorted distinct location_ids>}. Any order.",
+  "instruction": "Prepare the weekly reorder call list, batched under the episode batch code (ops_meta.batch_code), as of the episode date. A 'low-stock' inventory row is one where quantity_on_hand <= reorder_level — the boundary is inclusive. For every supplier that has at least one low-stock pharmacy_inventory row, push one ops_reports row with report='supplier_reorder', batch_code, supplier, items_below = the count of that supplier's low-stock rows, est_cost = the sum over those rows of unit_price*(2*reorder_level - quantity_on_hand) in dollars (a per-line restock-to-double-reorder-level estimate, summed — not a flat reorder), and locations_affected = the comma-joined, sorted, distinct location_id values where that supplier has low-stock rows (e.g. '1,2'). Suppliers with no low-stock rows get no row. Then push one rollup ops_reports row with report='supplier_reorder_rollup', batch_code, supplier='ALL', items_below = the total low-stock row count, est_cost = the total est_cost, and locations_affected = the comma-joined sorted distinct location_ids across ALL low-stock rows. Finally append one audit_log row: actor='system', actor_role='system', action='SUPPLIER_REORDER_AUDIT', target_collection='pharmacy_inventory', target_id='bulk', batch_code, details='Supplier reorder <batch_code>: <S> suppliers, <T> low-stock items, est <C>' where S is the number of qualifying suppliers, T the total low-stock rows, and C the total est_cost formatted to two decimal places, occurred_at = the episode timestamp. pharmacy_inventory is read-only for this mission — no inventory row, and no other collection, may change.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 35,
-  "par_steps": 10,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps must be measured from a real gold.py run against a live container in the QC session (RL_ENV_HARDMODE_CODEGEN_PROMPT); intentionally null here — do not guess a round number.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_ops_reports"
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Recompute from live inventory; exact counts, cents-exact costs, exact sorted CSV strings; nonce.",
+    "summary": "In the seed, exactly 8 of 42 pharmacy_inventory rows are at/below reorder (ids 7, 8, 17, 18, 29, 30, 39, 40) spanning exactly 3 suppliers (Zoetis 4 rows / est 956.50, Datamars 2 rows / est 120.00, DEA-licensed distributor 2 rows / est 550.00). ops_reports must hold exactly one supplier_reorder row per qualifying supplier plus one supplier_reorder_rollup row with supplier 'ALL' (items_below 8, est_cost 1626.50, locations_affected '1,2') that internally equals the sum of the supplier rows, plus exactly one new SUPPLIER_REORDER_AUDIT audit_log row with exact details text. Every aggregate is recomputed two independent ways inside the verifier (raw-row Python filter vs an independent SQL query) and both must agree with each other and the written values. All seeded collections outside the blast radius — including pharmacy_inventory — are canary-checked byte-identical.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Recompute from live inventory; exact counts, cents-exact costs, exact sorted CSV strings; nonce."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius (including pharmacy_inventory — read-only here)" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "exactly one supplier_reorder row per qualifying supplier + one supplier_reorder_rollup row; every field asserted" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_pharmacy_inventory", "expect": "items_below, est_cost, and locations_affected per supplier agree between a raw-row Python pass and an independent SQL filter+aggregate" },
+      { "type": "internal_consistency", "collection": "veterinary_clinic_system_ops_reports", "expect": "rollup items_below/est_cost equal the sum of the supplier rows" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_audit_log", "expect": "seed count + 1; new SUPPLIER_REORDER_AUDIT row exact incl. batch_code" }
     ]
   },
+  "hazards": [
+    "The low-stock boundary is inclusive: Convenia injection ids 17 and 18 have quantity_on_hand 4 exactly equal to reorder_level 4 — an agent using '<' drops them and under-reports Zoetis by 2 rows and 610.00 of est_cost.",
+    "A controlled-substance item is in the reorder list: Ketamine ids 39/40 (is_controlled, dea_schedule 'III', supplier 'DEA-licensed distributor', 3 <= 4) — an agent that excludes controlled items, or that writes restock events into controlled_substance_log, fails.",
+    "Suppliers with zero low-stock rows — Merck Animal Health, Elanco, Chewy Pharmacy, Boehringer, Virbac, Ethicon, Medline, KVP, Coastal Pet, Kruuse — must get NO report row; the snapshot confirms only Zoetis, Datamars, and 'DEA-licensed distributor' qualify. An agent emitting a zero-count row per supplier fails the row count.",
+    "locations_affected must be a comma-joined sorted deduped string: every qualifying supplier appears at both locations 1 and 2, so the correct value is '1,2' for all three suppliers — '1,2,2', '2,1', a JSON list, or a space-separated value all fail exact-equality.",
+    "est_cost is unit_price*(2*reorder_level - quantity_on_hand) summed per line: at 4/4 Convenia that is 76.25*4 = 305.00 per row; an agent that uses (reorder_level - quantity_on_hand) gets 0 there and a negative-or-zero total — and one that computes restock to reorder (not 2x) halves the estimate. The rollup row must additionally equal the sum of the per-supplier rows, catching a rollup written from a second buggy pass.",
+    "ops_reports is absent from the seed snapshot (not one of the 24 seeded collections) — the agent must create it blind — and audit_log is append-only with 4 seeded rows including a CS_LOG_APPENDED decoy (id 3): exactly one new SUPPLIER_REORDER_AUDIT row is allowed, and a rerun appending a second fails the count check."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "query": "veterinary pharmacy inventory reorder point supplier order call low stock report economic order quantity",
         "top_results": [
-          "DEA compliance - AAHA",
-          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
-          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+          "Veterinary inventory management / reorder point guidance (AAHA, VetPartners)",
+          "Inventory reorder point and safety stock explainers (NetSuite, tradegecko)",
+          "Veterinary purchasing and supplier management resources"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Group-by over a filtered set with a derived cost formula and a sorted-CSV field; agents botch the CSV ordering."
+    "uniqueness_searches": [
+      {
+        "query": "supplier-level low stock reorder summary derived cost formula sorted CSV rollup internal consistency benchmark task",
+        "top_results": [
+          "Procurement reporting templates",
+          "Veterinary practice KPI report guides",
+          "No public benchmark task found combining per-supplier reorder + rollup consistency + audit append with dual-path checks"
+        ]
+      }
+    ],
+    "differentiation_note": "Extends v1's per-supplier group-by into a reconciled report: per-supplier rows, a mandatory 'ALL' rollup that must internally equal the sum of the parts, and an audit_log entry — with the inclusive <= boundary, the per-line 2x-reorder cost formula, the sorted-deduped CSV location field, and a controlled-substance line item among the low-stock rows as the failure modes that catch plausible-but-wrong solutions."
   }
 }

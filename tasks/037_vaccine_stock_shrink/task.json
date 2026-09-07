@@ -1,58 +1,71 @@
 {
   "task_id": "037_vaccine_stock_shrink",
   "name": "veterinary_clinic_system_037_vaccine_stock_shrink",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "update",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["update", "aggregation", "idempotency"],
   "surface": "backend",
-  "instruction": "Stock-shrink adjustment: an audit found every location's vaccine stock (item_name containing 'vaccine', case-sensitive) overcounted. Reduce each such row's quantity_on_hand by ops_meta.shrink_pct PERCENT (round DOWN to whole units), and add field shrink_adjusted='<batch_code>'. Non-vaccine rows must remain byte-identical.",
+  "instruction": "A stock-shrink audit found that every vaccine SKU in pharmacy_inventory was overcounted, and the shrink must be reconciled against real upcoming demand. The shrink percentage for THIS episode is stored in veterinary_clinic_system_ops_meta.shrink_pct as an integer percent. (1) For every pharmacy_inventory row whose item_name contains 'vaccine' (case-sensitive substring), reduce quantity_on_hand by shrink_pct percent and round DOWN to a whole number of units — new quantity = floor(old_quantity * (100 - shrink_pct) / 100) — and on each row you change also set shrink_adjusted = the episode batch_code and pre_shrink_qty = the quantity_on_hand the row held before this episode's shrink. No other inventory row may change. (2) For every vaccine_type present in the vaccinations collection, push one ops_reports row with report='vaccine_shrink', batch_code, vaccine_type, pre_doses = the total on-hand units for that vaccine across all locations before the shrink (the sum of pre_shrink_qty over that type's rows), post_doses = the same after the shrink, demand_next_30 = the count of vaccinations rows of that vaccine_type whose due_date falls in the inclusive window [episode_date, episode_date + 30 days], and coverage_status = 'adequate' if post_doses >= demand_next_30 else 'short'. To match a vaccine inventory row to its vaccine_type, take the leading word of item_name and match it case-insensitively to vaccinations.vaccine_type (e.g. 'Bordetella vaccine' -> 'bordetella', 'DHPP vaccine' -> 'DHPP'). (3) Append one audit_log row: actor='system', actor_role='system', action='VACCINE_SHRINK_AUDIT', target_collection='pharmacy_inventory', target_id='bulk', batch_code, details='Vaccine shrink <batch_code>: <shrink_pct>% applied to <N> vaccine SKUs' where N is the number of inventory rows you adjusted, occurred_at = the episode timestamp. No other collection may change, and non-vaccine inventory rows (including controlled-substance items) must remain byte-identical.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 30,
-  "par_steps": 8,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps must be measured from a real gold.py run against a live container in the QC session (RL_ENV_HARDMODE_CODEGEN_PROMPT); intentionally null here — do not guess a round number.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code",
     "extra_fields": {
-      "shrink_pct": {
-        "min": 5,
-        "max": 20
-      }
+      "shrink_pct": { "min": 5, "max": 20 }
     }
   },
   "blast_radius": [
-    "veterinary_clinic_system_pharmacy_inventory"
+    "veterinary_clinic_system_pharmacy_inventory",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Read shrink_pct from ops_meta. From snapshot: rows with 'vaccine' in item_name -> expected qty = floor(qty*(100-pct)/100); assert exact ints + shrink_adjusted==nonce; all other rows byte-identical.",
+    "summary": "Every pharmacy_inventory row whose item_name contains 'vaccine' (8 seeded rows: ids 1-8) has quantity_on_hand = floor(seed_qty*(100-shrink_pct)/100), shrink_adjusted == batch_code, and pre_shrink_qty == the seeded quantity_on_hand; all other inventory rows byte-identical. ops_reports holds exactly one vaccine_shrink row per vaccine_type for this batch with pre_doses recomputed from the snapshot, post_doses recomputed from live post-shrink inventory, demand_next_30 recomputed two independent ways (raw-row Python filter vs SQL COUNT with a BETWEEN window) which must agree, and coverage_status derived from post_doses >= demand_next_30. audit_log gains exactly one VACCINE_SHRINK_AUDIT row. All seeded collections outside the blast radius are canary-checked byte-identical.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Read shrink_pct from ops_meta. From snapshot: rows with 'vaccine' in item_name -> expected qty = floor(qty*(100-pct)/100); assert exact ints + shrink_adjusted==nonce; all other rows byte-identical."
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_pharmacy_inventory", "expect": "8 vaccine rows floor-shrunk + tagged; other 34 rows byte-identical" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_vaccinations", "expect": "demand_next_30 per type agrees between a raw-row Python due_date filter and an independent SQL COUNT(*) ... BETWEEN" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "exactly len(vaccine_types) vaccine_shrink rows for batch_code; every field asserted incl. coverage_status" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_audit_log", "expect": "seed count + 1; new VACCINE_SHRINK_AUDIT row exact incl. batch_code" }
     ]
   },
+  "hazards": [
+    "Only 8 of the 42 pharmacy_inventory rows are vaccines (ids 1-8: 'Rabies vaccine 1yr', 'DHPP vaccine', 'FVRCP vaccine', 'Bordetella vaccine' at locations 1 and 2). The selection is a case-sensitive substring on item_name, not category='medication' — the 34 non-vaccine rows include 10 non-vaccine medication rows (ids 9-18), 16 supply rows (ids 19-34), and 8 controlled-substance rows (ids 35-42) that must stay byte-identical.",
+    "shrink_pct is an integer percent (5-20) in ops_meta, not a fraction: an agent that multiplies by (1 - shrink_pct) shrinks stock by 95-80x instead of 5-20%, and one that rounds instead of flooring fails on rows like Bordetella (9 units: 15% -> floor(7.65)=7, not 8).",
+    "vaccine_type matching is case-sensitive in the data: vaccinations.vaccine_type values are 'rabies', 'DHPP', 'FVRCP', 'bordetella' while item_names are 'Rabies vaccine 1yr', 'DHPP vaccine', 'FVRCP vaccine', 'Bordetella vaccine' — a case-sensitive or whole-name match silently drops two of the four types.",
+    "demand_next_30 is an inclusive [episode_date, episode_date+30] window over ~600 vaccinations rows, and episode_date itself jitters per episode — at ep=2026-09-30 the per-type counts are rabies 12, DHPP 10, FVRCP 9, bordetella 7, so an off-by-one boundary produces a plausible-but-wrong coverage_status on borderline types.",
+    "Idempotency is checked: a naive re-run re-applies the shrink to already-shrunk rows (second pass would take Rabies 30 -> 27 at 10% instead of staying 30) — the verifier derives expected quantities from the snapshot, not from live state, so double-shrinking fails. Equally, leaving shrink_adjusted/pre_shrink_qty unset or set to stale values fails — the verifier checks pre_shrink_qty equals the seeded quantity exactly.",
+    "Bordetella vaccine (ids 7-8, quantity_on_hand 9, reorder_level 10) is already at/below reorder before the shrink — an agent that skips already-low rows 'because they need reordering not shrinking' leaves unshrunk rows and fails the exact-quantity check. Likewise ops_reports is absent from the seed snapshot (not one of the 24 seeded collections) and audit_log's 4 seeded rows include a CS_LOG_APPENDED decoy (id 3) that must not be edited — the run must create the report rows blind and append exactly one audit row."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "query": "veterinary vaccine inventory shrinkage reconciliation cold chain stock count adjustment audit",
         "top_results": [
-          "DEA compliance - AAHA",
-          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
-          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+          "Vaccine storage and handling guidance (CDC/AAHA)",
+          "Veterinary inventory shrinkage and cycle counting resources",
+          "USDA/APHIS veterinary biologics inventory accountability"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Per-episode randomized percentage with floor rounding; substring (not category) selection."
+    "uniqueness_searches": [
+      {
+        "query": "vaccine inventory shrink percentage adjustment reconciled against upcoming due-date demand coverage status benchmark task",
+        "top_results": [
+          "Veterinary vaccine inventory management software pages",
+          "Stock shrinkage accounting explainers",
+          "No public benchmark task found combining randomized-percent shrink + demand coverage reconciliation + audit append"
+        ]
+      }
+    ],
+    "differentiation_note": "Extends v1's flat shrink pass into a shrink-and-reconcile mission: the randomized percent (ops_meta) is applied to live inventory AND the resulting stock is scored against real vaccination demand in a 30-day window, reported per vaccine_type with an adequacy flag, and closed with an audit entry. Case-insensitive type matching, floor rounding, the inclusive date window, and rerun-safe tagging are where plausible-but-wrong solutions fail."
   }
 }

@@ -1,28 +1,33 @@
 {
   "task_id": "031_cs_administer_witnessed_entry",
   "name": "veterinary_clinic_system_031_cs_administer_witnessed_entry",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "create",
-  "surface": "websearch",
-  "instruction": "Log a controlled-substance administration per DEA recordkeeping practice (every administration recorded with a witness \u2014 look up the convention if unsure): 0.2 units of Buprenorphine were administered to patient 4 (Noodle) for post-dental pain. Append one row to controlled_substance_log: item_name 'Buprenorphine', location_id '1', action 'administer', quantity 0.2, witnessed_by 'Rosa Delgado', performed_by 'Dr. Alvarez', occurred_at on the episode date, patient_id '4', notes 'Post-dental analgesia <batch_code>' (batch code from ops_meta). Append only \u2014 never edit existing log rows.",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["create", "workflow", "reconciliation"],
+  "surface": "backend",
+  "instruction": "A controlled-substance administration was performed today and must now be logged, inventoried, and audited. The clinical note says: 0.2 units of Buprenorphine were administered to the canine patient Noodle at the Main Street Animal Hospital for post-dental analgesia, performed by Dr. Elena Alvarez and witnessed by Rosa Delgado. Resolve all names to the correct ids/records from the live data (patients, providers, locations, pharmacy_inventory), then: (1) append one controlled_substance_log row with the administration details, the live batch_code in notes, and occurred_at on the episode date; (2) decrement the Buprenorphine pharmacy_inventory quantity_on_hand at that exact location by 0.2; (3) append one audit_log row describing the event; (4) push one ops_reports summary row (report='cs_administration_summary', batch_code) with the item_name, location_id, patient_id, quantity, inventory_before, and inventory_after. Do not modify any existing rows in controlled_substance_log, pharmacy_inventory, or audit_log. On a re-run, the operation must be idempotent: if a log row for this batch already exists, do not create a duplicate or decrement inventory again, but still rewrite the ops_reports and audit_log summary rows.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 20,
-  "par_steps": 5,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_controlled_substance_log"
+    "veterinary_clinic_system_controlled_substance_log",
+    "veterinary_clinic_system_pharmacy_inventory",
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Assert exactly one new row with all exact fields (notes embeds live nonce); seeded 12 rows byte-identical to snapshot; total 13.",
+    "summary": "One new controlled_substance_log row for the Buprenorphine administration at Main Street to patient Noodle, with 0.2 quantity, witnessed by Rosa Delgado, performed by Dr. Elena Alvarez, occurred_at on the episode date, and notes embedding the live batch_code. The Buprenorphine pharmacy_inventory row at that location is decremented by exactly 0.2 and all other inventory rows are byte-identical. One audit_log row and one ops_reports summary row are created for the batch. All collections outside the blast radius are unchanged.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +35,59 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Assert exactly one new row with all exact fields (notes embeds live nonce); seeded 12 rows byte-identical to snapshot; total 13."
+        "collection": "veterinary_clinic_system_controlled_substance_log",
+        "expect": "Exactly one new administration row matching the resolved patient, location, item, provider, witness, quantity, and notes"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_pharmacy_inventory",
+        "expect": "Buprenorphine at the target location decremented by 0.2; all other rows byte-identical"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_audit_log",
+        "expect": "Exactly one new CS_ADMINISTERED row for this batch"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one cs_administration_summary row for this batch with inventory before/after"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_pharmacy_inventory",
+        "expect": "inventory_after is confirmed by both a raw-row read and an independent SQL SELECT"
       }
     ]
   },
+  "hazards": [
+    "Name-to-record resolution: the instruction gives names, not ids. The agent must map 'Noodle' to patients.id=4, 'Main Street Animal Hospital' to locations.id=1, 'Dr. Elena Alvarez' to providers.id=1 (veterinarian), and 'Rosa Delgado' to providers.id=5 (vet_tech). Hardcoding ids from a prior episode fails on reseed.",
+    "Inventory location decoy: Buprenorphine exists in pharmacy_inventory at locations 1 and 2 (both with quantity_on_hand=7). Only the row matching the patient's location (location 1) must be decremented by 0.2; decrementing the location-2 row or both is wrong.",
+    "Idempotency: on a second run, a controlled_substance_log row with notes containing the batch_code already exists, the inventory has already been reduced to 6.8, and the ops_reports/audit_log rows already exist. A naïve solution appends a second log row, decrements inventory to 6.6, or duplicates the summary and fails.",
+    "Collection scope: controlled_substance_log is append-only. The agent must not edit the existing 12 seed rows; only one new row is appended.",
+    "Medication table decoy: there are active Buprenorphine medications for other patients (e.g., patient 49, 85, 199). The target is the named patient Noodle, not any Buprenorphine medication row."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "query": "DEA controlled substance administration log veterinary witness inventory decrement audit",
         "top_results": [
-          "DEA compliance - AAHA",
-          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
-          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+          "Veterinary Controlled Substance Log SOP: DEA Rules | WorkProcedures (https://www.workprocedures.com/blog/veterinary-controlled-substance-log-sop)",
+          "DEA Controlled-Substance Logs and Inventory Reconciliation: Biennial Counts, Discrepancy Investigations, Audit Readiness (https://veterinarybusinessguide.com/dea-controlled-substance-logs-and-inventory-reconciliation/)",
+          "DEA Controlled Substance Logging. A Guide for Veterinary Hospitals (https://www.cubex.com/news/dea-controlled-substance-logging-a-guide-for-veterinary-hospitals)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Append-only DEA log discipline; the seeded row shape must be matched exactly while embedding the live nonce."
+    "uniqueness_searches": [
+      {
+        "query": "controlled substance administration workflow patient inventory log audit veterinary task",
+        "top_results": [
+          "DEA Controlled-Substance Logs and Inventory Reconciliation: Biennial Counts, Discrepancy Investigations, Audit Readiness (https://veterinarybusinessguide.com/dea-controlled-substance-logs-and-inventory-reconciliation/)",
+          "VetKeystone — DEA, CURES & CVI compliance for independent veterinary practices (https://vetkeystone.com/)",
+          "DEA Controlled Substance Logging. A Guide for Veterinary Hospitals (https://www.cubex.com/news/dea-controlled-substance-logging-a-guide-for-veterinary-hospitals)"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines name resolution across patients, providers, locations, and pharmacy_inventory with append-only DEA logging, real inventory decrement, audit-trail creation, and idempotent summary reporting. Most veterinary CS tasks either only log or only reconcile; this one requires the full multi-collection administration workflow with live name-to-id resolution and an exact inventory adjustment."
   }
 }

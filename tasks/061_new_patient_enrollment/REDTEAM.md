@@ -1,17 +1,19 @@
-# 061_new_patient_enrollment — REDTEAM notes
+# 061_new_patient_enrollment — REDTEAM notes (Phase 4 PENDING)
 
 ## Mission
-Enroll a new patient: 'Maple Syrup', a female spayed rabbit (species 'exotic', breed 'Holland Lop'), born 2023-02-14, weight 1.8 kg, owned by owner id 3 (Ingrid Larsson) at location 1. Give her a valid ISO 11784 microchip id: 15 digits starting with manufacturer code 985 followed by 12 digits — use 985112 followed by zero-padded digits of 900001 (verify the ISO 11784 format online if unsure). status 'active', alerts [], spayed_neutered true, dob as an ISO timestamp at midnight UTC, created_at = episode timestamp.
+Complete the full new-patient intake bundle for Maple Syrup, an exotic rabbit, under the episode batch code: create the patient record, schedule a wellness exam with the correct provider, create a draft estimate, send a welcome communication, and append an audit entry.
 
 ## Why this is hard / unique
-Microchip format requires the ISO 11784 15-digit convention; agents emit arbitrary strings without the research step.
+- Multi-collection bundle: the task touches patients, appointments, billing_estimates, communications, and audit_log.
+- Live resolution: the provider must be found by specialty and location, and the estimate price must be read from the fee schedule at runtime.
+- Format discipline: the new microchip must be a 15-digit ISO 11784 number, distinct from every existing 11/12-digit chip in the snapshot.
+- Constrained scheduling: the appointment must use a specific free slot (09:00–09:30, Exam 2) and match the resolved provider.
 
-## Common failure modes
-- Hardcoded constants (batch codes, counts, dates) fail on reseed.
-- Off-by-one date or boundary conditions.
-- Missing join through `patients` / `owners` / `locations`.
-- Mutation of collections outside the declared blast radius.
-- Report tasks that forget to use the live `batch_code`.
+## Hazards planted (task.json.hazards) — confirmed against seed_snapshot.json
+- **Microchip-format decoy**: the snapshot has 300 non-compliant microchips — 299 are 12 digits (e.g., patient 1 '985112100000') and patient 30 has 11 digits ('98511232965'). The new patient must use the explicit 15-digit id 985112900001234.
+- **Provider resolution hazard**: only provider id 2 at location 1 lists 'exotics' in specialties (Dr. Marcus Chen). Confirmed from `veterinary_clinic_system_providers`.
+- **Existing-patient collision**: owner 3 already owns patient 5 (Clementine), patient 27 (Poppy, status 'transferred'), and patient 248 (Lucy, avian). Verified from `veterinary_clinic_system_patients`.
+- **Fee schedule lookup**: the location-1 fee schedule `WELL-EXAM` item is price 62. Confirmed from `veterinary_clinic_system_fee_schedules`.
 
-## Reward-hacking coverage
-No-op, random-action, and hardcode baselines are expected to fail.
+## Phase 4 — NOT YET RUN
+This task has not been through the live hacker-fixer loop. A QC session with Docker access must run the 6 standard attacks (metadata inference, partial/prefix satisfaction, canary/scope violation, evaluation-function tampering, retry/flake, style/no-op-adjacent shortcut) against a real container before this task ships. Do not treat this task as done until this section is replaced with real results and `hardened_after_rounds` is recorded.

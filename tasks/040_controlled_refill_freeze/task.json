@@ -1,53 +1,66 @@
 {
   "task_id": "040_controlled_refill_freeze",
   "name": "veterinary_clinic_system_040_controlled_refill_freeze",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "workflow",
-  "surface": "websearch",
-  "instruction": "Policy freeze: no controlled-substance prescription may carry refills once it has been active over 90 days (consistent with DEA caution around schedule III\u2013V refills \u2014 verify if unsure). For every medication row with is_controlled_substance true, active true, and prescribed_at more than 90 days before the episode date: set refills_remaining to 0 and add field refill_frozen='<batch_code>'. Log one audit_log row per affected prescription: {actor: 'system', actor_role: 'system', action: 'REFILL_FREEZE', target_collection: 'medications', target_id: <medication id as string>, details: 'Refills frozen for <drug_name> (<batch_code>)', occurred_at: episode timestamp}. Younger or inactive prescriptions are untouched.",
+  "category": ["workflow", "compliance", "aggregation"],
+  "surface": "backend",
+  "instruction": "Run the controlled-substance refill freeze and compliance summary. DEA guidance: an active controlled-substance prescription should not carry refills once it has been active for more than 90 days. (1) Target every medications row that is active, is_controlled_substance=true, refills_remaining > 0, and prescribed_at strictly more than 90 days before the episode date. For each target, set refills_remaining to 0, set refill_frozen to the episode batch code, and push one audit_log row: {actor: 'system', actor_role: 'system', action: 'REFILL_FREEZE', target_collection: 'medications', target_id: <medication id as string>, details: 'Refills frozen for <drug_name> (<batch_code>)', occurred_at: episode timestamp}. (2) Push one ops_reports row report='controlled_refill_summary' for each controlled drug name present in the data (Alprazolam, Buprenorphine, Ketamine, Tramadol) plus an 'ALL' row, all keyed by batch_code: {report, batch_code, drug_name, total_active, frozen, freeze_rate}. total_active = active controlled prescriptions for that drug; frozen = count of target prescriptions for that drug; freeze_rate = round(100 * frozen / total_active, 1) or 0.0 if total_active is 0. Do not touch non-controlled, inactive, recent, or already-zero-refill scripts. The solution must be idempotent and safe under a partial rerun.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 40,
-  "par_steps": 12,
+  "max_steps": null,
+  "par_steps": null,
+  "_steps_note": "par_steps and max_steps cannot be measured in a codegen-only session. They must be recorded from a live gold run in the QC container.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
     "veterinary_clinic_system_medications",
-    "veterinary_clinic_system_audit_log"
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Read ep. From snapshot: controlled+active rows with (ep - prescribed_at).days>90 -> assert refills 0 + tag; one audit row each with exact fields. All other medications byte-identical; audit count 4+K; nonce everywhere.",
+    "summary": "Compute episode date and 90-day cutoff from the live nonce. Re-derive the target set from the live medications table (active + is_controlled_substance + refills_remaining > 0 + prescribed_at < cutoff). Each target medication has refills_remaining=0 and refill_frozen=batch; all non-target medications are byte-identical to seed. Exactly one audit_log row per target with exact fields and batch in details. ops_reports contains exactly one controlled_refill_summary row per controlled drug name + one ALL row for this batch, with total_active, frozen, and freeze_rate recomputed two independent ways (Python filter and SQL GROUP BY) and matching. All collections outside the blast radius are canary-checked.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Read ep. From snapshot: controlled+active rows with (ep - prescribed_at).days>90 -> assert refills 0 + tag; one audit row each with exact fields. All other medications byte-identical; audit count 4+K;"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_medications + audit_log + ops_reports", "expect": "target medications frozen, one audit each, summary rows per drug + ALL" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_medications", "expect": "per-drug total_active and frozen counts agree between raw-row Python filter and SQL GROUP BY" }
     ]
   },
+  "hazards": [
+    "dea_schedule is not authoritative: seed row medications id=2 (Alprazolam, active, is_controlled_substance=true, prescribed_at 2026-05-07, refills_remaining=1) has dea_schedule=null. A solution that filters on dea_schedule instead of is_controlled_substance misses this target and under-freezes.",
+    "Old controlled scripts with no remaining refills must not be frozen: e.g., id=18 (Tramadol, active controlled, prescribed_at 2026-06-20, refills_remaining=0), id=50 (Alprazolam 2026-04-03, refills 0), id=58 (Buprenorphine 2026-03-09, refills 0). They satisfy the age and controlled flags but fail refills_remaining>0 and must remain untouched.",
+    "Recent controlled scripts with refills are decoys: e.g., id=46 (Alprazolam 2026-07-17, refills 1), id=62 (Buprenorphine 2026-08-21, refills 1), id=166 (Tramadol 2026-08-25, refills 1), id=174 (Buprenorphine 2026-08-12, refills 1). They are active and controlled with refills, but prescribed_at is within 90 days of the episode and they must not be frozen.",
+    "The prescribed_at boundary is live and strict: the episode date jitters +/-3 days around a late-September anchor, so the 90-day cutoff shifts. Rows with prescribed_at around the boundary (e.g., id=38 Tramadol 2026-07-05 with refills 0) sit right at the edge; a hardcoded or off-by-one cutoff will misclassify targets versus decoys.",
+    "Non-controlled medications are out of scope: the seed contains ~150 active non-controlled prescriptions (e.g., Carprofen, Gabapentin, Amoxicillin-clavulanate). A solution that freezes by drug name or dea_schedule instead of is_controlled_substance would corrupt these rows.",
+    "Idempotency and audit fidelity: on a partial rerun the live medications table already has refills_remaining=0 for frozen rows. The gold must derive counts from the live post-state, not from a run-local delta, and must not create duplicate audit_log or ops_reports rows for the same batch_code."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "DEA controlled substance log requirements veterinary clinic witness waste recordkeeping",
+        "query": "DEA controlled substance prescription refill 90 days veterinary clinic policy",
         "top_results": [
-          "DEA compliance - AAHA",
-          "21 CFR 1304.04 Maintenance of records and inventories (eCFR)",
-          "DEA Controlled Substance Logging: A Guide for Veterinary Hospitals (Cubex)"
+          "CONTROLLED SUBSTANCE MANAGEMENT DEA AND NY STATE REGULATIONS (livma.org)",
+          "Prescriptions for Controlled Substances (deadiversion.usdoj.gov)",
+          "Practitioner's Manual (pehsc.org)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Age-in-days threshold on a timestamp field + paired audit entries; domain-knowledge framing with a data-derived target set."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary clinic controlled substance refill freeze audit log benchmark RL task",
+        "top_results": [
+          "Veterinary Pharmacy & Rx Refill Automation: 2026 Tools (ustechautomations.com)",
+          "Fix Veterinary Prescription Refill Automation in 2026 (ustechautomations.com)",
+          "DEA Controlled-Substance Logs and Inventory Reconciliation (veterinarybusinessguide.com)"
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 fuses a DEA-date-threshold policy action with a per-drug compliance summary and audit trail. It adds row-level decoys (null dea_schedule, refills=0, recent prescriptions, non-controlled meds) and requires both Python and SQL derivation of the summary counts. Idempotency and partial-rerun safety are enforced through live post-state re-derivation and batch-keyed deduplication."
   }
 }

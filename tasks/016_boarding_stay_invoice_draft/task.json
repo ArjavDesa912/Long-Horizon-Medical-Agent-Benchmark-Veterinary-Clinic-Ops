@@ -1,53 +1,73 @@
 {
   "task_id": "016_boarding_stay_invoice_draft",
   "name": "veterinary_clinic_system_016_boarding_stay_invoice_draft",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "workflow",
-  "surface": "websearch",
-  "instruction": "Check out every guest whose stay ends on or before the episode date and bill the stay \u2014 this is what the front desk does at pick-up. For each checked_in reservation with check_out <= episode date: (1) set the reservation status to 'checked_out'; (2) create a draft invoice for the owner with invoice_number 'INV-B<batch_code>-<reservation_id>' (batch code from ops_meta), owner_id and patient_id from the reservation, location_id from the reservation, issued_date and due_date both on the episode date (due = issued + 21 days, standard net-21 \u2014 verify the convention if unsure), line_items=[{description: 'Boarding (<N> nights - <run_type>)', quantity: <N>, unit_price: <BOARD-NIGHT price from that location's fee schedule>}], total_amount=<N*price>, amount_paid=0, status='draft'. N = nights = days between check_in and check_out. Do not free the runs (housekeeping handles that separately) and do not touch paid invoices.",
+  "category": ["workflow", "aggregation", "reconciliation"],
+  "surface": "backend",
+  "instruction": "Close out and bill all boarding stays that end on or before the episode date. This is the front-desk pick-up workflow.\n\nFor every boarding_reservation with status 'checked_in' and check_out <= episode_date (inclusive):\n1. Set the reservation status to 'checked_out'.\n2. Free the assigned run: set the corresponding boarding_runs status to 'available' and current_patient_id to empty.\n3. Create a draft invoice with invoice_number 'INV-B<batch_code>-<reservation_id>', owner_id and patient_id from the reservation (owner_id is the patient's owner), location_id from the reservation, issued_date and due_date both as ISO timestamps on the episode date (the practice uses net-21 terms, so due_date = issued_date + 21 days), line_items=[{description: 'Boarding (<N> nights - <run_type>)', quantity: <N>, unit_price: <BOARD-NIGHT price from that location's fee_schedule>}], total_amount = N * unit_price, amount_paid = 0, status = 'draft'. N is the whole number of nights between check_in and check_out (check_out - check_in in days).\n4. Push an audit_log entry with action='BOARDING_CLOSEOUT', actor='system', actor_role='front_desk', target_collection='boarding_reservations', target_id=<reservation_id>, details='Boarding stay <reservation_id> closed and invoiced by batch <batch_code>', occurred_at=<episode_date with time>.\n\nAfter all stays are processed, create exactly one ops_reports row 'boarding_closeout' keyed by the live batch_code with: episode_date, checked_out_count, total_nights, total_revenue, average_night_rate (round(total_revenue / total_nights, 2) if total_nights > 0 else 0), revenue_by_location (dict {location_name: total}), run_status_summary (dict {location_name: {available: int, occupied: int, maintenance: int, cleaning: int}} from live runs). Overwrite any existing 'boarding_closeout' row for this batch.\n\nDo not touch reservations that are already 'checked_out' or 'reserved', do not re-bill existing invoices, and do not create invoices for no-shows or future stays.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 50,
-  "par_steps": 15,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
+    "veterinary_clinic_system_boarding_reservations",
+    "veterinary_clinic_system_boarding_runs",
     "veterinary_clinic_system_billing_invoices",
-    "veterinary_clinic_system_boarding_reservations"
+    "veterinary_clinic_system_audit_log",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "From snapshot: checked_in reservations with dp(check_out)<=ep. For each: assert status=='checked_out' and exactly one invoice with exact invoice_number (live nonce), correct owner/patient/location, N==days(dp(check_in),dp(check_out)), unit_price==snapshot fee_schedule BOARD-NIGHT price for that location, totals in cents, status draft. Assert no other invoice rows added/changed (count == 26+E) and all paid invoices unchanged.",
+    "summary": "Expected reservations are the seed checked_in reservations with check_out <= ep. For each: reservation status 'checked_out' and all other fields unchanged; run is 'available' with current_patient_id cleared; exactly one draft invoice with the live invoice_number, correct owner/patient/location, N nights, unit_price from the location's BOARD-NIGHT fee schedule, total_amount = N * price, amount_paid 0, due_date = ep + 21 days; one audit_log entry. Existing reservations and invoices are unchanged except the targeted fields. One ops_reports 'boarding_closeout' row per batch with counts, revenue, and run status summary that match dual-path recomputation (raw-row Python and SQL GROUP BY/COUNT/SUM).",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "From snapshot: checked_in reservations with dp(check_out)<=ep. For each: assert status=='checked_out' and exactly one invoice with exact invoice_number (live nonce), correct owner/patient/location, N="
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_boarding_reservations", "expect": "Only the expected checked_in stays are flipped to 'checked_out'; all other reservations unchanged" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_boarding_runs", "expect": "Runs for expected reservations are available with current_patient_id cleared; other runs unchanged" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_billing_invoices", "expect": "Exactly seed_count + expected_count invoices; new ones have the batch-embedded invoice_number and correct draft fields; existing invoices unchanged" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_audit_log", "expect": "One BOARDING_CLOSEOUT audit entry per expected reservation, no extras" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_ops_reports", "expect": "Exactly one boarding_closeout row per batch with correct aggregates" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_billing_invoices", "expect": "total_revenue and revenue_by_location agree between the reservation/fee-schedule Python path and an independent SQL SUM/GROUP BY over the created invoices" }
     ]
   },
+  "hazards": [
+    "Checked-in decoys: the snapshot has exactly 5 checked_in reservations (ids 1-5, all location 1, runs 1-5, check_out 2026-09-06/07/09). There are 113 already checked_out reservations and 260 pre-existing invoices; a solution that re-bills or re-checks them out will be caught by the invoice count and reservation canary checks.",
+    "Overlapping reserved bookings: checked_in reservations 3 and 4 share their runs with reserved future bookings (reservation 99 on run 3 from 2026-09-28, reservation 98 on run 4 from 2026-09-18). Those reserved stays must not be checked out or billed.",
+    "Run vs reservation billing: owner_id must come from the patient record, not the reservation, and location_id must come from the reservation. The fee schedule BOARD-NIGHT price is 38 at every location in the snapshot, but a solution that hardcodes 38 instead of reading the fee_schedule still works only by accident and fails on reseed if prices change.",
+    "Net-21 due date: the due_date is issued_date + 21 days, not the same as issued_date and not check_out + 21 days. At the default episode date 2026-09-30, due_date is 2026-10-21.",
+    "Idempotency: a second run must not create duplicate invoices or audit_log entries. The invoice_number includes the live batch_code and reservation id, so the gold solution can detect an existing invoice and skip.",
+    "Boundary condition: check_out <= episode_date is inclusive; at the default episode date all 5 checked_in stays qualify, but at episode dates before 2026-09-06 none qualify, so a hardcoded count fails on jitter."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary boarding checkout invoice net 21 terms fee schedule boarding night charge",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "LegalClarity — Dog Boarding Invoice Template: What to Include (https://legalclarity.org/dog-boarding-invoice-template-what-to-include/)",
+          "InvoiceQuick — Pet Boarding Invoice Template (Free) PDF, Word, Excel (https://invoicequick.com/invoice-templates/pet-boarding-invoice-template)",
+          "Vetspire User Manual — Boarding Check-In, Checkout, and Estimates (https://manual.vetspire.com/vetspire-user-manual/ok/Commercial/boarding-check-in-and-print-kennel-card)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Multi-hop pricing (fee schedule join), night-count date arithmetic, net-21 due-date convention from domain knowledge, nonce-embedded numbering."
+    "uniqueness_searches": [
+      {
+        "query": "veterinary boarding stay closeout invoice fee schedule multi-collection reconciliation benchmark task",
+        "top_results": [
+          "Beancount — Pet Boarding, Daycare, and Grooming Bookkeeping: Run-Night Revenue, Add-On Allocation, and Gingr/PetExec Reconciliation (https://beancount.io/blog/2026/05/19/pet-boarding-daycare-grooming-bookkeeping-kennel-owners-revenue-per-run-night-add-on-services-vaccination-compliance-gingr-petexec-reconciliation-retail-vs-service-chart-of-accounts-guide)",
+          "USTech Automations — Capture Boarding Revenue: Gingr vs PetDesk vs Square 2026 (https://ustechautomations.com/resources/blog/automate-veterinary-boarding-management-gingr-petdesk-square-2026)",
+          "USTech Automations — How to Automate Veterinary Boarding Reservations in 2026 (https://ustechautomations.com/resources/blog/veterinary-boarding-reservation-automation-how-to)"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgraded from a simple per-stay invoice draft into a full closeout workflow: reservation status, run occupancy, invoice creation, audit trail, and a revenue/run-status summary with dual-path verification. The red herrings are seeded real-world conflicts (overlapping reserved bookings on the same run, pre-existing invoices) rather than artificial noise."
   }
 }

@@ -1,28 +1,33 @@
 {
   "task_id": "028_draft_invoice_purge",
   "name": "veterinary_clinic_system_028_draft_invoice_purge",
-  "version": "1.0.0",
-  "difficulty": "easy",
-  "category": "delete",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["delete", "create", "aggregation"],
   "surface": "backend",
-  "instruction": "Delete every billing invoice with status 'draft'. Paid, sent, and overdue invoices must remain exactly as seeded. Report nothing; just leave the ledger clean.",
+  "instruction": "Purge every draft billing document from both the invoice and estimate ledgers. A 'draft' status means the document is not yet authoritative and should be removed. For each deleted draft invoice or estimate, push one outbound email communications row to that document's owner: channel='email', direction='outbound', subject='Draft document cancelled <batch_code>', body='Draft <invoice_number or estimate_number> has been removed from our system.', logged_by='Billing', occurred_at the episode timestamp, owner_id set to the document's owner_id, and patient_id set to the document's patient_id. After the purge, push one ops_reports row with report='draft_purge' and the live batch_code containing: episode_date, invoices_deleted, estimates_deleted, total_deleted, affected_owners (sorted list of distinct owner_id strings), affected_patients (sorted list of distinct patient_id strings), affected_documents (list of {type, document_number, owner_id, patient_id, location_id} for every deleted document, sorted by document_number), and location_breakdown (dict mapping each location name to the count of deleted documents from that location). Leave every non-draft invoice and estimate byte-identical to the seed snapshot. If a draft_purge report or cancellation communications for this batch already exist, overwrite them so the result is idempotent.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 20,
-  "par_steps": 4,
+  "max_steps": null,
+  "_max_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
+  "par_steps": null,
+  "_par_steps_note": "Measured against a live container in the QC session; placeholder because this codegen-only session cannot run gold.",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
   },
   "blast_radius": [
-    "veterinary_clinic_system_billing_invoices"
+    "veterinary_clinic_system_billing_invoices",
+    "veterinary_clinic_system_billing_estimates",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports"
   ],
   "success_criteria": {
-    "summary": "Assert no invoice with status 'draft' remains; assert all non-draft invoices byte-identical to snapshot; count == 26 - (draft count in snapshot, 1).",
+    "summary": "All draft billing_invoices and billing_estimates are deleted; every non-draft row in those collections is byte-identical to the seed snapshot. One cancellation communication is pushed per deleted document with exact subject/body/occurred_at and correct owner_id/patient_id. Exactly one ops_reports 'draft_purge' row for this batch contains the live counts, sorted affected owner/patient lists, the affected_documents detail, and a location breakdown. Every aggregate (counts, distinct counts, location counts) is computed two independent ways (raw-row Python and SQL) and must agree with the agent's written report. All collections outside the blast radius are byte-identical to the seed snapshot.",
     "checks": [
       {
         "type": "canary_hash",
@@ -30,23 +35,64 @@
       },
       {
         "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Assert no invoice with status 'draft' remains; assert all non-draft invoices byte-identical to snapshot; count == 26 - (draft count in snapshot, 1)."
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "No draft invoice remains; all non-draft invoices byte-identical to seed snapshot"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_billing_estimates",
+        "expect": "No draft estimate remains; all non-draft estimates byte-identical to seed snapshot"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_communications",
+        "expect": "One cancellation communication per deleted draft document with exact fields"
+      },
+      {
+        "type": "derived_rows",
+        "collection": "veterinary_clinic_system_ops_reports",
+        "expect": "Exactly one 'draft_purge' row for this batch with all required fields"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_invoices",
+        "expect": "deleted invoice count and location breakdown agree between raw-row Python and SQL"
+      },
+      {
+        "type": "dual_path",
+        "collection": "veterinary_clinic_system_billing_estimates",
+        "expect": "deleted estimate count and location breakdown agree between raw-row Python and SQL"
       }
     ]
   },
+  "hazards": [
+    "The draft ledgers are small: exactly 1 draft invoice (INV-1003, owner 3, patient 3, location 3, total $546.00) and 30 draft estimates. The bulk of the collections are non-draft (257 paid/sent/overdue invoices and 70 sent/accepted/declined estimates). A solution that deletes non-draft rows fails the canary byte-identity checks; a solution that does not delete the estimate drafts leaves 30 stale rows.",
+    "The cancellation communications must be one per deleted document, not one per affected owner. Each of the 31 deleted documents has a distinct owner and patient in this seed, but the code must not collapse by owner.",
+    "The report's affected_owners and affected_patients must be the distinct, sorted owner/patient ids from the deleted documents. A list that includes all owners or uses the document ids fails.",
+    "The location_breakdown must use locations.name, not the raw location_id. The three locations are Main Street Animal Hospital, Riverside Veterinary Clinic, and Cedar Park Animal Care Center.",
+    "On a second run there are no draft documents left. A naive re-run that purges live drafts and then pushes communications would create zero new rows and a wrong report. The gold uses an idempotent overwrite keyed by batch_code."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "veterinary invoice accounts receivable aging 30 60 90 days late fee policy",
+        "query": "veterinary draft estimate invoice purge cleanup cancellation",
         "top_results": [
-          "Account for receivables with a written policy - dvm360",
-          "Learn to Manage Your Accounts Receivable - Today's Veterinary Business",
-          "Effective credit & collection techniques - dvm360"
+          "Generate Draft Invoices (Oracle Projects Help)",
+          "Purging Drafts",
+          "Cancelation of draft invoices generated in invoice schedules | Zuora Product Documentation"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Surgical delete with exact preservation of survivors \u2014 bulk-delete-then-reinsert hacks fail byte-identity (ids/updated_at)."
+    "uniqueness_searches": [
+      {
+        "query": "draft invoice estimate purge cancellation notice report benchmark",
+        "top_results": [
+          "Generate Draft Invoices (Oracle Projects Help)",
+          "Purging Drafts",
+          "Cancelation of draft invoices generated in invoice schedules | Zuora Product Documentation"
+        ]
+      }
+    ],
+    "differentiation_note": "Upgrades a single-collection delete into a cross-ledger purge with cancellation communications, an audit report, and a location breakdown, all verified by dual Python/SQL paths and byte-identical survivor checks."
   }
 }

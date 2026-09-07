@@ -1,19 +1,21 @@
 {
   "task_id": "065_deceased_patient_archive",
   "name": "veterinary_clinic_system_065_deceased_patient_archive",
-  "version": "1.0.0",
-  "difficulty": "medium",
-  "category": "workflow",
+  "version": "2.0.0",
+  "difficulty": "hard",
+  "category": ["workflow", "reconciliation", "idempotency"],
   "surface": "backend",
-  "instruction": "Patient 17 (Rocket) has passed away. Archive properly: (1) set the patient's status to 'deceased' and add field archived='<batch_code>'; (2) cancel any of his 'reserved' boarding reservations (status 'cancelled', cancellation_reason 'patient_deceased'); (3) remove his 'waiting' waitlist entries (delete them); (4) cancel his future appointments (status 'scheduled' or 'confirmed' with appointment_date on/after the episode date -> status 'cancelled'). Completed and past records are history \u2014 never alter them.",
+  "instruction": "A client has just reported that their pet passed away. The patient is not identified by name or id in the call - you must derive it from live data as of the episode date. The deceased patient is the ACTIVE patient with the earliest future scheduled or confirmed appointment (appointment_date >= episode date) among active patients that also have a reserved boarding reservation with check_in >= episode date. If several appointments tie on date, pick the lowest appointment id.\n\nArchive the patient properly and notify the owner:\n1. Set the patient's status to 'deceased' and archived='<batch_code>'.\n2. Cancel every reserved boarding reservation for that patient with check_in >= episode_date: status='cancelled', cancellation_reason='patient_deceased'.\n3. Archive (do not delete) every 'waiting' waitlist entry for that patient: status='archived', archived_by='<batch_code>'.\n4. Cancel every future appointment for that patient with status in ('scheduled','confirmed') and appointment_date >= episode_date: status='cancelled'.\n5. Push one outbound email to the owner: subject 'Condolences for <patient.name> - <batch_code>', body 'We are sorry to hear that <patient.name> has passed away. We have cancelled future appointments and reservations as of <episode_date>.', channel='email', direction='outbound', logged_by='system', occurred_at the episode timestamp, owner_id and patient_id set.\n6. Push one ops_reports row report='deceased_archive', batch_code, patient_id, owner_id, cancelled_reservations, cancelled_appointments, archived_waitlist, archive_note='deceased'.\n7. Push one audit_log row: action='PATIENT_DECEASED_ARCHIVED', actor='system', actor_role='system', target_collection='patients', target_id=<patient_id>, details='Batch <batch_code> - archived patient <patient_id>', occurred_at the episode timestamp.\n\nDo not modify completed or past records. Do not change any other patient's data. All mutations must be keyed on the live batch code so a re-run reaches the same end state.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 45,
-  "par_steps": 13,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -22,34 +24,48 @@
     "veterinary_clinic_system_patients",
     "veterinary_clinic_system_boarding_reservations",
     "veterinary_clinic_system_waitlist",
-    "veterinary_clinic_system_appointments"
+    "veterinary_clinic_system_appointments",
+    "veterinary_clinic_system_communications",
+    "veterinary_clinic_system_ops_reports",
+    "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Assert patient 17 deceased+tag; his reserved reservations cancelled w/ reason; his waiting waitlist rows GONE (count check); his future scheduled/confirmed appointments cancelled; every other row across the four collections byte-identical to snapshot.",
+    "summary": "The target active patient is derived from live data (earliest future scheduled/confirmed appointment among those with a future reserved boarding stay). Patient status becomes 'deceased' with archived=batch. Future reserved boarding stays for that patient become 'cancelled' with cancellation_reason='patient_deceased'. Future scheduled/confirmed appointments become 'cancelled'. Waiting waitlist entries for that patient become 'archived' with archived_by=batch. Exactly one condolence communication is pushed. Exactly one ops_reports row and one audit_log row are created for the batch. All other rows across the seven collections are unchanged (or, for ops_reports/audit_log/communications, only the expected new rows).",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Assert patient 17 deceased+tag; his reserved reservations cancelled w/ reason; his waiting waitlist rows GONE (count check); his future scheduled/confirmed appointments cancelled; every other row acro"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "(see verifier.py)", "expect": "Target patient derived from live data; all cancellations and archive tags match; communications/ops_reports/audit_log counts and content verified." },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_appointments", "expect": "Target selection and cancellation counts are computed independently via Python filter and SQL and must agree." }
     ]
   },
+  "hazards": [
+    "Patient 17 (Rocket, owner 13) was the v1 target but is now active with no future scheduled/confirmed appointments or reserved boarding stays in the v2 seed; a hardcoded id 17 archives the wrong patient and fails (patient id 17, status 'active', weight 6, location 1).",
+    "The actual target is episode-date dependent: at 2026-09-27/28 the target is patient 1 (Biscuit, owner 1, appointment 227 on 2026-09-28, boarding reservation 83 check_in 2026-11-02); at 2026-09-29 the target is patient 200 (Bailey, owner 211, appointment 66 on 2026-09-29, reservation 20 check_in 2026-10-27); at 2026-09-30 through 2026-10-03 the target is patient 204 (Millie, owner 36, appointment 418 on 2026-10-03, reservation 81 check_in 2026-10-31). A hardcoded id fails on other episode dates.",
+    "There are 7 reserved boarding reservations with check_in before the episode date (ids 6, 7, 8, 17, 65, 85, 98, all with check_in on 2026-09-24 or earlier). A cancellation that does not require check_in >= episode_date will over-cancel and fail.",
+    "Appointments include past/completed/checked_in/no_show statuses (176 completed, 66 no_show, 10 checked_in in the seed). Cancelling all appointments for the target regardless of status or date alters history and fails.",
+    "The waitlist has 6 rows for patients 3, 7, 11, 15, 19, and 23. Only the target patient's waiting rows may be archived; deleting all waiting rows or deleting other patients' rows fails.",
+    "The target selection rule requires BOTH a future scheduled/confirmed appointment and a future reserved boarding stay. A patient with only one or the other must not be selected."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice deceased patient archive cancel future appointments boarding reservations",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Change to actions on deceasing animals - VisionVPM Help",
+          "Set a patient as deceased - ezyVet Knowledge Center",
+          "2026 How to search for a deceased pet to cancel a plan - IDEXX Petly Plans"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Cross-collection cascaded archival where each target collection has a different correct action (update vs cancel vs delete)."
+    "uniqueness_searches": [
+      {
+        "query": "RL benchmark deceased patient archive derived target rule episode date boarding appointment",
+        "top_results": [
+          "Change to actions on deceasing animals - VisionVPM Help",
+          "Set a patient as deceased - ezyVet Knowledge Center",
+          "2026 How to search for a deceased pet to cancel a plan - IDEXX Petly Plans"
+        ]
+      }
+    ],
+    "differentiation_note": "Combines a live-derived target selection rule (earliest future appointment among patients with future boarding stays) with cross-collection archival and owner notification, dual-path verification on the target and cancellation counts, and idempotent re-run semantics across 7 collections."
   }
 }

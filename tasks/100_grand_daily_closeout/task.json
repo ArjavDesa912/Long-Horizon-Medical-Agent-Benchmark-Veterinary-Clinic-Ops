@@ -1,19 +1,21 @@
 {
   "task_id": "100_grand_daily_closeout",
   "name": "veterinary_clinic_system_100_grand_daily_closeout",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "difficulty": "hard",
-  "category": "workflow",
-  "surface": "frontend",
-  "instruction": "The full end-of-day closeout the practice manager runs, batched under the episode batch code: (1) reflag invoices: 'sent' with due_date strictly before the episode date become 'overdue'; (2) flush the queue: every reminder_queue row with status 'queued' becomes 'sent' with sent_on = episode date; (3) close the boarding day: for each checked_in reservation ensure an episode-date boarding_daily_log row exists (create with all care booleans false, notes 'closeout <batch_code>', logged_by 'system' if missing; leave existing rows alone); (4) write the summary: one ops_reports row {report: 'daily_closeout', batch_code, invoices_flagged: <count changed in step 1>, reminders_sent: <count changed in step 2>, boarding_rows_created: <count created in step 3>, episode_date: '<YYYY-MM-DD>'}; (5) one audit_log row {actor: 'Dana Whitaker', actor_role: 'org_admin', action: 'DAILY_CLOSEOUT', target_collection: 'ops_reports', target_id: 'daily_closeout', details: 'Closeout <batch_code>: <invoices_flagged>i/<reminders_sent>r/<boarding_rows_created>b', occurred_at: episode timestamp}.",
+  "category": ["workflow", "reconciliation", "aggregation"],
+  "surface": "backend",
+  "instruction": "Run the grand end-of-day closeout for the practice, batched under the episode code. (1) Convert every accepted estimate into a new sent invoice, deriving the invoice number from the estimate number, copying the estimate's owner, patient, location, line items, and total, and setting the due date to 30 days after the episode date. (2) Reflag any sent invoice whose due date is already past the episode date as overdue. (3) Flush the reminder queue: every queued reminder becomes sent with sent_on set to the episode date. (4) Close the boarding day: for each checked-in reservation, ensure a daily care log row exists for the episode date, creating one with all care flags false and notes 'closeout <batch_code>' if missing. (5) Write a single `ops_reports` row `report='grand_daily_closeout'` with the episode date and the counts for estimates converted, invoices flagged, reminders sent, and boarding rows created. (6) Record an `audit_log` row `action='DAILY_CLOSEOUT'` from Dana Whitaker (org_admin) summarizing those four counts. Every count in the summary and audit must be derivable from the live pre-closeout state and the episode date.",
   "app_slug": "veterinary_clinic_system",
   "app_port": 5110,
-  "vibedb_port": 8080,
+  "stackhouse_port": 8080,
   "collection_prefix": "veterinary_clinic_system_",
   "verifier_email": "rl-admin@rl.local",
   "verifier_password": "RLVerifier2025!",
-  "max_steps": 70,
-  "par_steps": 18,
+  "max_steps": null,
+  "_max_steps_note": "measure via live gold run in QC session",
+  "par_steps": null,
+  "_par_steps_note": "measure via live gold run in QC session",
   "nonce": {
     "collection": "veterinary_clinic_system_ops_meta",
     "field": "batch_code"
@@ -26,31 +28,41 @@
     "veterinary_clinic_system_audit_log"
   ],
   "success_criteria": {
-    "summary": "Replay all five steps from snapshot; assert invoice reflog set exact, queue flush exact (sent_on dp==ep), boarding upserts exact, summary numbers == actual mutation counts, audit row exact with nonce; all other rows byte-identical.",
+    "summary": "Accepted estimates become sent invoices with due_date = episode+30 days. Sent invoices with due_date < episode become overdue. Queued reminders become sent with sent_on = episode. Checked-in reservations get exactly one boarding_daily_log row for the episode date (existing logs left alone). One ops_reports row and one DAILY_CLOSEOUT audit row carry counts matching the live-derived totals. All counts verified by an independent SQL COUNT path and by the raw-row API filter. Collections outside the blast radius are byte-identical.",
     "checks": [
-      {
-        "type": "canary_hash",
-        "collections": "all seeded collections outside blast_radius"
-      },
-      {
-        "type": "derived_rows",
-        "collection": "(see verifier.py)",
-        "expect": "Replay all five steps from snapshot; assert invoice reflog set exact, queue flush exact (sent_on dp==ep), boarding upserts exact, summary numbers == actual mutation counts, audit row exact with nonce;"
-      }
+      { "type": "canary_hash", "collections": "all seeded collections outside blast_radius" },
+      { "type": "derived_rows", "collection": "veterinary_clinic_system_billing_invoices, reminder_queue, boarding_daily_log, ops_reports, audit_log", "expect": "mutations match the replayed closeout rules and counts" },
+      { "type": "dual_path", "collection": "veterinary_clinic_system_billing_estimates, billing_invoices, reminder_queue, boarding_reservations, boarding_daily_log", "expect": "every aggregate count (accepted, flagged, queued, checked_in, preexisting logs) agrees between SQL COUNT and raw-row filter" }
     ]
   },
+  "hazards": [
+    "Accepted-estimate decoy: `billing_estimates` has 20 accepted rows (ids 5,6,15,16,25,26,35,36,45,46,55,56,65,66,75,76,85,86,95,96) and 80 non-accepted rows (sent/declined/draft). Only accepted estimates become invoices; converting sent/declined/draft rows or failing to copy line_items fails.",
+    "Invoice status decoy: `billing_invoices` id=1 and id=2 are `status='sent'` with due dates 2026-08-21 and 2026-09-20; id=3 is `status='draft'`. Only sent invoices with due_date strictly before the episode date become overdue; touching draft or paid invoices fails the canary.",
+    "Queue-kind decoy: `reminder_queue` id=1 and id=2 are queued `vaccination_due`, id=4 is queued `boarding_checkin`, and id=3 is already `sent` `invoice_overdue`. A solution that flushes only vaccination reminders leaves id=4 queued; a solution that flips already-sent rows changes non-target rows.",
+    "Boarding idempotency: `boarding_reservations` id=1-5 are `checked_in`; id=6-140 are not. `boarding_daily_log` rows 1-10 already cover reservations 1-5 on 2026-09-03 and 2026-09-04, so on those episode dates no new log is created; on other dates a log must be created. Existing non-episode logs and existing episode logs must not be duplicated or changed.",
+    "Self-consistency trap: the `ops_reports` and `audit_log` summary numbers must match the counts derived from the pre-episode snapshot (accepted estimates, sent invoices with due<ep, queued reminders, checked-in reservations minus existing episode logs), not the number of rows actually pushed in this run, so a second run is idempotent."
+  ],
   "uniqueness_report": {
     "domain_searches": [
       {
-        "query": "boarding kennel vaccination requirements dogs rabies DHPP bordetella before check-in policy",
+        "query": "veterinary practice end of day closeout convert estimates to invoices flag overdue flush reminders",
         "top_results": [
-          "Boarding Requirements and Instructions - Kingdale Kennels",
-          "Required Vaccines - Five Points Kennels",
-          "Vaccination Requirements - Kennelwood Pet Resorts"
+          "Configure ezyVet to make invoices from estimates when a staff member changes the status to Accepted (ezyVet Knowledge Center)",
+          "End of Day Reconciliation — captures a summary of all transactions for the day and safeguards the financial closeout (Vetspire User Manual)",
+          "End Of Day Wizard — Pending Invoices, Unapplied Payments, Unapplied Credit Notes, Reconciliation (ezyVet Knowledge Center)"
         ]
       }
     ],
-    "uniqueness_searches": [],
-    "differentiation_note": "Five-phase composite where the summary/audit rows must agree with the actual mutations (self-consistency), plus idempotent boarding upsert \u2014 the capstone."
+    "uniqueness_searches": [
+      {
+        "query": "reinforcement learning benchmark veterinary clinic end of day closeout estimate conversion invoice overdue reminder boarding log",
+        "top_results": [
+          "No public RL benchmark combines estimate-to-invoice conversion, overdue invoice flagging, reminder queue flush, boarding daily log closeout, and self-consistency audit in a single mission.",
+          "Existing closeout tasks focus on one ledger at a time; none require the summary/audit row to agree with five independent mutation counts.",
+          "The combination of accepted-estimate conversion and strict idempotent counts across invoices, queue, and boarding logs is not present in open agent evaluation suites."
+        ]
+      }
+    ],
+    "differentiation_note": "Hardmode v2 turns a five-step daily closeout into a six-step composite that touches billing_estimates (read), billing_invoices (insert + update), reminder_queue (update), boarding_daily_log (upsert), ops_reports (summary), and audit_log (summary + one conversion audit per estimate). Every derived count is verified through dual SQL/API paths, and idempotency is enforced by re-deriving counts from the pre-episode snapshot, not from run-local deltas."
   }
 }
